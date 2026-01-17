@@ -1,0 +1,104 @@
+:root {
+  /* --- Color Palette: Slate (Backgrounds & Borders) --- */
+  --color-slate-950: #020617; /* App Background */
+  --color-slate-900: #0f172a; /* Panel Backgrounds */
+  --color-slate-800: #1e293b; /* Card Backgrounds */
+  --color-slate-700: #334155; /* Boarders */
+  --color-slate-600: #475569; /* Muted Text */
+  --color-slate-400: #94a3b8; /* Secondary Text */
+  --color-slate-200: #e2e8f0; /* Primary Text */
+  --color-white: #ffffff;
+
+  /* --- Semantic Colors --- */
+  --color-danger: #ef4444;    /* Critical/Fatal */
+  --color-danger-bg: #450a0a;
+  --color-warning: #f97316;   /* Error/Warning */
+  --color-warning-bg: #431407;
+  --color-success: #10b981;   /* Info/Success */
+  --color-success-bg: #064e3b;
+  --color-info: #3b82f6;      /* General Info */
+  --color-info-bg: #172554;
+  
+  --color-accent: #6366f1;    /* Primary Actions */
+  --color-anomaly: #f43f5e;   /* Anomaly Pulse */
+
+  /* --- Spacing --- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  /* --- Layout --- */
+  --header-height: 64px;
+  --sidebar-width: 64px; /* Collapsed sidebar */
+  --detail-panel-width: 420px;
+
+  /* --- Typography --- */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Monaco', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-200);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  height: 100vh;
+  overflow: hidden; /* App handles scroll */
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-slate-950);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-slate-700);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-slate-600);
+}
+
+/* Utilities */
+.text-danger { color: var(--color-danger); }
+.text-warning { color: var(--color-warning); }
+.text-success { color: var(--color-success); }
+.text-info { color: var(--color-info); }
+.text-muted { color: var(--color-slate-400); }
+
+.bg-danger { background-color: var(--color-danger-bg); }
+.bg-warning { background-color: var(--color-warning-bg); }
+.bg-success { background-color: var(--color-success-bg); }
+
+/* Animation */
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.animate-pulse-red {
+  animation: pulse-red 2s infinite;
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}

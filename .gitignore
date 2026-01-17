@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+*.log
+
+# Editor
+.vscode
+.idea
+
+# Node / Dashboard
+node_modules/
+dist/
+dashboard/.env
+dashboard/.env.local
+
+# Go / Ingestion
+ingestion-service/bin/
+ingestion-service/tmp/
+
+# Python / Processing
+processing-service/venv/
+processing-service/__pycache__/
+*.pyc
+
+# Docker / Data
+*.gz

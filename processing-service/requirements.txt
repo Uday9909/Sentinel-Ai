@@ -1,0 +1,7 @@
+kafka-python
+elasticsearch
+drain3
+scikit-learn
+ollama
+numpy
+requests
