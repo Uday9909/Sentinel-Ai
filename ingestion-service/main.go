@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"net/http"
+	"time"
+
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -12,6 +16,32 @@ type LogEntry struct {
 	Service string `json:"service"` // e.g., "payment-gateway"
 	Level   string `json:"level"`   // e.g., "error" or "info"
 	Message string `json:"message"` // e.g., "Database connection failed"
+}
+
+// --- PROMETHEUS METRICS ---
+var (
+	logsIngested = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "logs_ingested_total",
+			Help: "Total number of logs received by the ingestion service",
+		},
+		[]string{"service", "level"},
+	)
+
+	ingestionLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ingestion_duration_seconds",
+			Help:    "Time taken to process and send log to Kafka",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"status"},
+	)
+)
+
+func init() {
+	// Register metrics with Prometheus
+	prometheus.MustRegister(logsIngested)
+	prometheus.MustRegister(ingestionLatency)
 }
 
 func main() {
@@ -26,8 +56,12 @@ func main() {
 	// 2. Create the Web Server (The Funnel)
 	r := gin.Default()
 
+	// --- EXPOSE METRICS ENDPOINT ---
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	// 3. Define the "Ingest" endpoint
 	r.POST("/ingest", func(c *gin.Context) {
+		start := time.Now()
 		var entry LogEntry
 
 		// Check if the incoming data is a valid LogEntry
@@ -43,10 +77,18 @@ func main() {
 			},
 		)
 
+		duration := time.Since(start).Seconds()
+
 		if err != nil {
+			// Record failure metric
+			ingestionLatency.WithLabelValues("error").Observe(duration)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send to Kafka"})
 			return
 		}
+
+		// Record success metrics
+		ingestionLatency.WithLabelValues("success").Observe(duration)
+		logsIngested.WithLabelValues(entry.Service, entry.Level).Inc()
 
 		c.JSON(http.StatusOK, gin.H{"status": "Log received and sent to pipe!"})
 	})

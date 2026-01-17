@@ -5,3 +5,4 @@ scikit-learn
 ollama
 numpy
 requests
+prometheus-client
