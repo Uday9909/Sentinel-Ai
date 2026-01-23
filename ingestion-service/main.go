@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -13,9 +14,13 @@ import (
 
 // This is the shape of a "Log". Every log sent to us must look like this.
 type LogEntry struct {
-	Service string `json:"service"` // e.g., "payment-gateway"
-	Level   string `json:"level"`   // e.g., "error" or "info"
-	Message string `json:"message"` // e.g., "Database connection failed"
+	Service   string            `json:"service"`             // e.g., "payment-gateway"
+	Level     string            `json:"level"`               // e.g., "error" or "info"
+	Message   string            `json:"message"`             // e.g., "Database connection failed"
+	TraceID   string            `json:"trace_id,omitempty"`  // e.g., "abc-123-xyz"
+	Host      string            `json:"host,omitempty"`      // e.g., "prod-worker-1"
+	Timestamp int64             `json:"timestamp,omitempty"` // Unix epoch
+	Labels    map[string]string `json:"labels,omitempty"`    // Extra metadata
 }
 
 // --- PROMETHEUS METRICS ---
@@ -46,10 +51,12 @@ func init() {
 
 func main() {
 	// 1. Setup the connection to Kafka (The Pipe)
+	// Configured to write asynchronously by default in newer kafka-go versions if batching is enabled,
+	// but let's stick to simple Writer config for now.
 	writer := &kafka.Writer{
 		Addr:     kafka.TCP("localhost:9092"),
 		Topic:    "raw-logs",
-		Balancer: &kafka.LeastBytes{},
+		Balancer: &kafka.Hash{}, // Use Hash balancer to ensure same Key goes to same Partition
 	}
 	defer writer.Close()
 
@@ -70,10 +77,22 @@ func main() {
 			return
 		}
 
+		// Auto-fill timestamp if missing
+		if entry.Timestamp == 0 {
+			entry.Timestamp = time.Now().Unix()
+		}
+
+		// Helper: Convert struct back to JSON bytes for Kafka
+		// (In a real app, you might optimize this to avoid double-decoding/encoding)
+		// For now, we just marshal the whole entry to preserve the new fields.
+		val, _ := json.Marshal(entry)
+
 		// Push the log into the Kafka Pipe
+		// Key: Partition by Service so all logs from "auth-service" go to the same shard (Preserve Order)
 		err := writer.WriteMessages(context.Background(),
 			kafka.Message{
-				Value: []byte(entry.Message),
+				Key:   []byte(entry.Service),
+				Value: val,
 			},
 		)
 
