@@ -1,68 +1,67 @@
-# 🛰️ Sentinel Platform
+# Sentinel
+**Real-time Log Intelligence & Anomaly Detection Platform**
 
-**Real-time Incident Command & Log Intelligence Platform**
-
-Sentinel is an end-to-end streaming observability platform that ingests logs, detects anomalies in real-time using unsupervised machine learning, and leverages Large Language Models (LLMs) to provide instant Root Cause Analysis (RCA).
+Sentinel is an end-to-end streaming observability platform that ingests logs, detects anomalies in real-time using unsupervised machine learning, and uses LLMs to generate instant Root Cause Analysis (RCA).
 
 ![Sentinel Dashboard](./1770096317053.jpeg)
 
 ---
 
-## 🏗 Architecture
+## Architecture
 
 ```mermaid
 graph LR
-    A[Producer Services] -->|HTTP POST| B[Ingestion Service (Go)]
+    A[Producer Services] -->|HTTP POST| B[Ingestion Service - Go]
     B -->|Log Events| C[Apache Kafka]
-    C -->|Consume| D[Processor Service (Python)]
-    
-    subgraph "AI Core"
+    C -->|Consume| D[Processor Service - Python]
+
+    subgraph AI Core
     D -->|Buffer & Train| E[Isolation Forest Model]
-    D -->|Query| F[Ollama (Llama 3.2)]
+    D -->|Query| F[Ollama - Llama 3.2]
     end
-    
+
     D -->|Index| G[Elasticsearch]
-    G <-->|Query| H[Dashboard (React + Vite)]
+    G <-->|Query| H[Dashboard - React + Vite]
 ```
 
-## 🚀 Technology Stack
+## Stack
 
-| Component | Tech | Responsibility |
-|-----------|------|----------------|
-| **Ingestion** | **Go (Gin)** | High-throughput API gateway handling thousands of reqs/sec. |
-| **Messaging** | **Kafka** | Durable event streaming and backpressure management. |
-| **Processing** | **Python 3** | Anomaly detection (`scikit-learn`) and AI orchestration. |
-| **Intelligence** | **Ollama** | Local LLM inference for Root Cause Analysis. |
-| **Storage** | **Elasticsearch** | Indexed log storage for fast search and aggregation. |
-| **UI** | **React + Vite** | Real-time "Mission Control" dashboard. |
+| Component | Tech | Role |
+|-----------|------|------|
+| Ingestion | Go (Gin) | High-throughput API gateway |
+| Messaging | Kafka | Event streaming and backpressure management |
+| Processing | Python 3 | Anomaly detection via scikit-learn |
+| Intelligence | Ollama (Llama 3.2) | Local LLM inference for RCA |
+| Storage | Elasticsearch | Indexed log storage and aggregation |
+| UI | React + Vite | Real-time dashboard |
 
 ---
 
-## 🛠 Quick Start
+## Getting Started
 
 ### Prerequisites
+
 - Docker & Docker Compose
 - Node.js v18+
 - Python 3.9+
 - Go 1.21+
-- [Ollama](https://ollama.com/) running locally with `llama3.2:1b` model.
+- [Ollama](https://ollama.com/) running locally with `llama3.2:1b`
 
 ### 1. Start Infrastructure
+
 ```bash
-# Start Kafka, Zookeeper, Elasticsearch
 docker-compose up -d
 ```
 
 ### 2. Start Services
-Open 3 separate terminals:
 
-**Terminal 1: Ingestion API**
+**Ingestion API**
 ```bash
 cd ingestion-service
 go run main.go
 ```
 
-**Terminal 2: AI Processor**
+**AI Processor**
 ```bash
 cd processing-service
 python3 -m venv venv
@@ -71,23 +70,24 @@ pip install -r requirements.txt
 python processor.py
 ```
 
-**Terminal 3: Mission Control Dashboard**
+**Dashboard**
 ```bash
 cd dashboard
 npm install
 npm run dev
 ```
 
-Visit the dashboard at [http://localhost:5173](http://localhost:5173).
+Visit `http://localhost:5173`
 
 ---
 
-## 🎬 Demo "Story Mode"
+## Demo
 
-To demonstrate the platform's capabilities (e.g., for a LinkedIn demo), run the included scenario script. This generates a sequence of:
-1.  **Normal Traffic** (Healthy logs)
-2.  **Warning Signals** (Latency spikes, retries)
-3.  **CRITICAL ANOMALY** (Burst of database failures triggering the AI)
+The repo includes a scenario script that simulates a realistic incident progression:
+
+1. Normal traffic
+2. Warning signals — latency spikes, retries
+3. Critical anomaly — database failure burst triggering ML detection and LLM RCA
 
 ```bash
 python3 scripts/demo_script.py
@@ -95,9 +95,9 @@ python3 scripts/demo_script.py
 
 ---
 
-## 🔮 Roadmap
-See [roadmap.md](./roadmap.md) for full engineering plans, including:
-- [ ] Phase 1: Observability (Prometheus/Grafana)
-- [ ] Phase 2: Chaos Engineering & Reliability
-- [ ] Phase 3: Distributed Tracing with Jaeger
-- [ ] Phase 4: Kubernetes Migration
+## Roadmap
+
+- [ ] Prometheus/Grafana integration
+- [ ] Chaos engineering layer
+- [ ] Distributed tracing with Jaeger
+- [ ] Kubernetes migration
