@@ -3,7 +3,7 @@
 
 Sentinel is an end-to-end streaming observability platform that ingests logs, detects anomalies in real-time using unsupervised machine learning, and uses LLMs to generate instant Root Cause Analysis (RCA).
 
-![Sentinel Dashboard](./1770096317053.jpeg)
+![Sentinel Dashboard](./docs/sentinel-architecture.jpeg)
 
 ---
 

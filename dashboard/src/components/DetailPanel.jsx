@@ -45,6 +45,19 @@ const DetailPanel = ({ log, onClose }) => {
                 <h2 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--color-white)' }}>
                     Incident Details
                 </h2>
+                <button
+                    onClick={onClose}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--color-slate-400)',
+                        cursor: 'pointer',
+                        padding: '4px',
+                    }}
+                    title="Close"
+                >
+                    <X size={18} />
+                </button>
             </div>
 
             {/* AI Analysis Section - Prominent if Anomaly */}
@@ -66,10 +79,6 @@ const DetailPanel = ({ log, onClose }) => {
                         {log.ai_explanation || "Analyzing system behavior..."}
                     </p>
 
-                    {/* Actionable Suggestions (Mockup logic based on text) */}
-                    <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--color-slate-800)' }}>
-                        <p style={{ fontSize: '11px', color: 'var(--color-slate-400)' }}>Suggested Action: Check database connectivity and restart connection pool.</p>
-                    </div>
                 </div>
             )}
 
