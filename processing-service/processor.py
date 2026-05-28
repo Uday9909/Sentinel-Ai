@@ -1,3 +1,8 @@
+import json
+import time
+import os
+from collections import deque
+
 from kafka import KafkaConsumer
 from elasticsearch import Elasticsearch
 from drain3 import TemplateMiner
@@ -5,150 +10,206 @@ from drain3.template_miner_config import TemplateMinerConfig
 from sklearn.ensemble import IsolationForest
 from prometheus_client import start_http_server, Counter, Histogram
 import ollama
-import numpy as np
-import json
-import time
-import os
-from collections import deque
 from joblib import dump, load
+
+# --- CONFIG ---
+MODEL_PATH = "isolation_forest.joblib"
+TRAIN_INTERVAL = 60          # seconds between model retrains
+ANOMALY_RATE_FLOOR = 20.0    # minimum logs/sec to consider rate-based anomaly
+OLLAMA_COOLDOWN_SEC = 30     # skip LLM if it failed within this many seconds
 
 # --- PROMETHEUS METRICS ---
 LOGS_PROCESSED = Counter('logs_processed_total', 'Total logs consumed from Kafka')
 ANOMALIES_DETECTED = Counter('anomalies_detected_total', 'Total anomalies identified by AI')
 PROCESSING_TIME = Histogram('processing_duration_seconds', 'Time taken to analyze a log batch')
+ES_WRITE_ERRORS = Counter('es_write_errors_total', 'Total Elasticsearch write failures')
 
-# 1. Setup Everything
-template_miner = TemplateMiner(config=TemplateMinerConfig())
-es = Elasticsearch(["http://localhost:9200"])
-consumer = KafkaConsumer('raw-logs', bootstrap_servers=['localhost:9092'], value_deserializer=lambda m: m.decode('utf-8'))
 
-print("🤖 AI-Powered SRE Agent is ONLINE.")
+# ---------------------------------------------------------------------------
+# Detection helpers (extracted for testability)
+# ---------------------------------------------------------------------------
 
-# Start Prometheus Metrics Server on Port 8001
-start_http_server(8001)
-print("📊 Metrics Server running on port 8001")
+def has_keyword_indicator(log_text: str) -> bool:
+    """Return True if the log text contains known severity keywords."""
+    return any(kw in log_text.lower() for kw in ("error", "critical", "fail"))
 
-# Use a sliding window for anomaly detection (History of log rates)
-log_timestamps = deque(maxlen=100)
-rate_history = deque(maxlen=50) 
-NORMAL_RATE_THRESHOLD = 50.0 # logs/sec guess
-MODEL_PATH = "isolation_forest.joblib"
-LAST_TRAIN_TIME = time.time()
-TRAIN_INTERVAL = 60 # seconds
 
-# Load existing model if available
-model = None
-if os.path.exists(MODEL_PATH):
+def train_if_needed(model, rate_history, last_train_time):
+    """Retrain the IsolationForest model if it is missing or stale."""
+    now = time.time()
+    if model is not None and (now - last_train_time < TRAIN_INTERVAL):
+        return model, last_train_time
+    if len(rate_history) < 10:
+        return model, last_train_time
     try:
-        model = load(MODEL_PATH)
-        print("✅ Loaded persisted anomaly model.")
+        new_model = IsolationForest(contamination=0.05, random_state=42)
+        new_model.fit(list(rate_history))
+        dump(new_model, MODEL_PATH)
+        print("Model retrained and persisted.")
+        return new_model, now
     except Exception as e:
-        print(f"⚠️ Failed to load model: {e}")
+        print(f"Model training failed: {e}")
+        return model, last_train_time
 
-for message in consumer:
-    start_time = time.time()
-    LOGS_PROCESSED.inc()
-    
-    # Parse JSON Log
+
+def check_rate_anomaly(logs_per_sec: float, rate_history, model) -> bool:
+    """Use IsolationForest to detect anomalous log rates."""
+    if model is None or len(rate_history) < 10:
+        return False
+    current_rate_vector = [[logs_per_sec]]
     try:
-        log_data = json.loads(message.value)
-        # Handle case where message might still be raw text (backward compatibility/safety)
-        if isinstance(log_data, str):
-             log_text = log_data
-             log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+        if model.predict(current_rate_vector)[0] == -1 and logs_per_sec > ANOMALY_RATE_FLOOR:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def run_ai_analysis(log_text, log_data, last_failure_time):
+    """Call Ollama for RCA.  Returns (is_anomaly, ai_summary, new_failure_time)."""
+    now = time.time()
+    if now - last_failure_time < OLLAMA_COOLDOWN_SEC:
+        return True, "AI Analysis Unavailable (Ollama cooldown)", last_failure_time
+
+    try:
+        response = ollama.chat(model='llama3.2:1b', messages=[
+            {
+                'role': 'system',
+                'content': (
+                    "You are a Senior DevOps Engineer. Analyze the log entry. "
+                    "If it indicates a system failure, error, or critical issue, provide "
+                    "a 1-sentence explanation and 2 short fixes. If the log is just "
+                    "informational, debug, or success, standard system activity, reply "
+                    "ONLY with the word 'Normal'."
+                )
+            },
+            {
+                'role': 'user',
+                'content': (
+                    f"Log Entry: '{log_text}'\n"
+                    f"Service: {log_data.get('service')}\n"
+                    f"TraceID: {log_data.get('trace_id', 'N/A')}\n"
+                    f"Host: {log_data.get('host', 'N/A')}"
+                )
+            },
+        ])
+        ai_content = response['message']['content'].strip()
+        if "Normal" in ai_content and len(ai_content) < 15:
+            return False, "Normal", last_failure_time
         else:
-             log_text = log_data.get("message", "")
-    except json.JSONDecodeError:
-        log_text = message.value
-        log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-        
-    result = template_miner.add_log_message(log_text)
-    
-    # Calculate Log Rate (Sliding Window)
-    current_time = time.time()
-    log_timestamps.append(current_time)
-    
-    logs_per_sec = 0
-    if len(log_timestamps) > 1:
-        time_span = log_timestamps[-1] - log_timestamps[0]
-        if time_span > 0:
-            logs_per_sec = len(log_timestamps) / time_span
-            rate_history.append([logs_per_sec])
+            print(f"\nAI ANALYSIS:\n{ai_content}\n")
+            return True, ai_content, last_failure_time
+    except Exception as e:
+        print(f"AI Analysis Failed: {e}")
+        return True, "AI Analysis Unavailable", now
 
-    # --- ANOMALY DETECTION ---
-    is_anomaly = False
-    ai_summary = "Normal"
-    
-    # 1. Keyword Heuristic (Immediate Flag)
-    if "error" in log_text.lower() or "critical" in log_text.lower() or "fail" in log_text.lower():
-        is_anomaly = True
-    
-    # 2. Statistical Anomaly (Spike Detection)
-    elif len(rate_history) > 10:
-        # Train/Update Model Periodically
-        if model is None or (current_time - LAST_TRAIN_TIME > TRAIN_INTERVAL):
-             try:
-                # Re-train on recent history (sliding window)
-                # In a real system, you'd want a larger, persisted training set
-                new_model = IsolationForest(contamination=0.05, random_state=42)
-                new_model.fit(list(rate_history))
-                model = new_model
-                dump(model, MODEL_PATH)
-                LAST_TRAIN_TIME = current_time
-                print("🔄 Model retrained and persisted.")
-             except Exception as e:
-                 print(f"⚠️ Model training failed: {e}")
 
-        # Predict using current model
-        if model:
-             current_rate_vector = [[logs_per_sec]]
-             if model.predict(current_rate_vector)[0] == -1:
-                 # Only flag if rate is also significantly high (avoid low-rate anomalies)
-                 if logs_per_sec > 20: 
-                     is_anomaly = True
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 
-    if is_anomaly:
-        ANOMALIES_DETECTED.inc()
-        print(f"🚨 ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
+def main():
+    template_miner = TemplateMiner(config=TemplateMinerConfig())
+    es_url = os.getenv("ES_URL", "http://localhost:9200")
+    kafka_broker = os.getenv("KAFKA_BROKER", "localhost:9092")
+    es = Elasticsearch([es_url])
+    consumer = KafkaConsumer(
+        'raw-logs',
+        bootstrap_servers=[kafka_broker],
+        value_deserializer=lambda m: m.decode('utf-8'),
+        group_id='sentinel-processor',
+        auto_offset_reset='earliest',
+    )
 
+    print("AI-Powered SRE Agent is ONLINE.")
+
+    start_http_server(8001)
+    print("Metrics Server running on port 8001")
+
+    log_timestamps = deque(maxlen=100)
+    rate_history = deque(maxlen=50)
+
+    model = None
+    if os.path.exists(MODEL_PATH):
         try:
-            # --- THE GEN-AI BRAIN (Improved Prompt) ---
-            response = ollama.chat(model='llama3.2:1b', messages=[
-                {
-                    'role': 'system', 
-                    'content': "You are a Senior DevOps Engineer. Analyze the log entry. If it indicates a system failure, error, or critical issue, provide a 1-sentence explanation and 2 short fixes. If the log is just informational, debug, or success, standard system activity, reply ONLY with the word 'Normal'."
-                },
-                {
-                    'role': 'user',
-                    'content': f"Log Entry: '{log_text}'\nService: {log_data.get('service')}\nTraceID: {log_data.get('trace_id', 'N/A')}\nHost: {log_data.get('host', 'N/A')}"
-                },
-            ])
-            
-            ai_content = response['message']['content'].strip()
-            
-            if "Normal" in ai_content and len(ai_content) < 15:
-                is_anomaly = False # False positive corrected by AI
-                ai_summary = "Normal"
-            else:
-                ai_summary = ai_content
-                print(f"\n💡 AI ANALYSIS:\n{ai_summary}\n")
-                
+            model = load(MODEL_PATH)
+            print("Loaded persisted anomaly model.")
         except Exception as e:
-            print(f"AI Analysis Failed: {e}")
-            ai_summary = "AI Analysis Unavailable"
+            print(f"Failed to load model: {e}")
 
-    # Save everything to the DB
-    document = {
-        "message": log_text,
-        "service": log_data.get("service", "unknown"),
-        "level": log_data.get("level", "unknown"),
-        "trace_id": log_data.get("trace_id", ""),
-        "host": log_data.get("host", ""),
-        "timestamp_log": log_data.get("timestamp", 0),
-        "is_anomaly": is_anomaly,
-        "ai_explanation": ai_summary,
-        "timestamp_processed": time.time()
-    }
-    es.index(index="logs-index", document=document)
-    
-    PROCESSING_TIME.observe(time.time() - start_time)
+    last_train_time = time.time()
+    last_ollama_failure = 0.0
+
+    for message in consumer:
+        start_time = time.time()
+        LOGS_PROCESSED.inc()
+
+        # --- Parse ---
+        try:
+            log_data = json.loads(message.value)
+            if isinstance(log_data, str):
+                log_text = log_data
+                log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+            else:
+                log_text = log_data.get("message", "")
+        except json.JSONDecodeError:
+            log_text = message.value
+            log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+
+        # --- Template mining (Drain3) ---
+        template_result = template_miner.add_log_message(log_text)
+        cluster_id = template_result.cluster_id
+
+        # --- Log rate (sliding window) ---
+        current_time = time.time()
+        log_timestamps.append(current_time)
+
+        logs_per_sec = 0.0
+        if len(log_timestamps) > 1:
+            time_span = log_timestamps[-1] - log_timestamps[0]
+            if time_span > 0:
+                logs_per_sec = len(log_timestamps) / time_span
+                rate_history.append([logs_per_sec])
+
+        # --- ANOMALY DETECTION ---
+        # Each detector runs independently — no single check short-circuits the others.
+        keyword_anomaly = has_keyword_indicator(log_text)
+
+        model, last_train_time = train_if_needed(model, rate_history, last_train_time)
+        rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
+
+        is_anomaly = keyword_anomaly or rate_anomaly
+
+        # --- AI ANALYSIS (only for anomalies) ---
+        ai_summary = "Normal"
+        if is_anomaly:
+            ANOMALIES_DETECTED.inc()
+            print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
+            is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
+                log_text, log_data, last_ollama_failure
+            )
+
+        # --- Persist to Elasticsearch ---
+        document = {
+            "message": log_text,
+            "service": log_data.get("service", "unknown"),
+            "level": log_data.get("level", "unknown"),
+            "trace_id": log_data.get("trace_id", ""),
+            "host": log_data.get("host", ""),
+            "timestamp_log": log_data.get("timestamp", 0),
+            "is_anomaly": is_anomaly,
+            "ai_explanation": ai_summary,
+            "cluster_id": cluster_id,
+            "timestamp_processed": time.time(),
+        }
+        try:
+            es.index(index="logs-index", document=document)
+        except Exception as e:
+            ES_WRITE_ERRORS.inc()
+            print(f"ES write failed: {e}")
+
+        PROCESSING_TIME.observe(time.time() - start_time)
+
+
+if __name__ == "__main__":
+    main()

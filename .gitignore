@@ -12,9 +12,20 @@ dist/
 dashboard/.env
 dashboard/.env.local
 
+# GitNexus
+.gitnexus
+AGENTS.md
+CLAUDE.md
+
+# Claude Code
+.claude/
+
 # Go / Ingestion
 ingestion-service/bin/
 ingestion-service/tmp/
+ingestion-service/ingestion-server
+ingestion-service/ingestion_server.exe
+ingestion-service/ingestion-service
 
 # Python / Processing
 processing-service/venv/
@@ -23,3 +34,4 @@ processing-service/__pycache__/
 
 # Docker / Data
 *.gz
+.gitnexus

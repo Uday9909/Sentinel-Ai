@@ -1,5 +1,9 @@
 version: '3.8'
+
 services:
+  # -----------------------------------------------------------
+  # Infrastructure
+  # -----------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
     environment:
@@ -11,11 +15,16 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.3.0
     depends_on: [zookeeper]
-    ports: ["9092:9092"]
+    ports:
+      - "9092:9092"   # internal (container-to-container)
+      - "9093:9093"   # external (host-to-container)
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     volumes:
       - kafka_data:/var/lib/kafka/data
@@ -26,11 +35,6 @@ services:
     environment:
       - discovery.type=single-node
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - http.cors.enabled=true
-      - http.cors.allow-origin=*
-      - http.cors.allow-methods=OPTIONS,HEAD,GET,POST,PUT,DELETE
-      - http.cors.allow-headers=X-Requested-With,Content-Type,Content-Length,Authorization
-      - http.cors.allow-credentials=true
     volumes:
       - es_data:/usr/share/elasticsearch/data
 
@@ -39,8 +43,6 @@ services:
     ports: ["9090:9090"]
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana
@@ -50,6 +52,32 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+
+  # -----------------------------------------------------------
+  # Application services
+  # -----------------------------------------------------------
+  ingestion-service:
+    build:
+      context: ./ingestion-service
+    ports: ["8080:8080"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+      LISTEN_ADDR: ":8080"
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  processing-service:
+    build:
+      context: ./processing-service
+    ports: ["8001:8001"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+      ES_URL: http://elasticsearch:9200
+    depends_on:
+      - kafka
+      - elasticsearch
+    restart: unless-stopped
 
 volumes:
   zookeeper_data:

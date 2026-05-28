@@ -3,7 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,18 +17,16 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// This is the shape of a "Log". Every log sent to us must look like this.
 type LogEntry struct {
-	Service   string            `json:"service"`             // e.g., "payment-gateway"
-	Level     string            `json:"level"`               // e.g., "error" or "info"
-	Message   string            `json:"message"`             // e.g., "Database connection failed"
-	TraceID   string            `json:"trace_id,omitempty"`  // e.g., "abc-123-xyz"
-	Host      string            `json:"host,omitempty"`      // e.g., "prod-worker-1"
-	Timestamp int64             `json:"timestamp,omitempty"` // Unix epoch
-	Labels    map[string]string `json:"labels,omitempty"`    // Extra metadata
+	Service   string            `json:"service"`
+	Level     string            `json:"level"`
+	Message   string            `json:"message"`
+	TraceID   string            `json:"trace_id,omitempty"`
+	Host      string            `json:"host,omitempty"`
+	Timestamp int64             `json:"timestamp,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
 }
 
-// --- PROMETHEUS METRICS ---
 var (
 	logsIngested = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -44,74 +47,150 @@ var (
 )
 
 func init() {
-	// Register metrics with Prometheus
 	prometheus.MustRegister(logsIngested)
 	prometheus.MustRegister(ingestionLatency)
 }
 
-func main() {
-	// 1. Setup the connection to Kafka (The Pipe)
-	// Configured to write asynchronously by default in newer kafka-go versions if batching is enabled,
-	// but let's stick to simple Writer config for now.
-	writer := &kafka.Writer{
-		Addr:     kafka.TCP("localhost:9092"),
-		Topic:    "raw-logs",
-		Balancer: &kafka.Hash{}, // Use Hash balancer to ensure same Key goes to same Partition
-	}
-	defer writer.Close()
+// logWriter is satisfied by *kafka.Writer and allows mock injection in tests.
+type logWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
 
-	// 2. Create the Web Server (The Funnel)
+type Server struct {
+	writer logWriter
+	router *gin.Engine
+	http   *http.Server
+}
+
+func NewServer(writer logWriter) *Server {
+	s := &Server{writer: writer}
+	s.router = s.setupRouter()
+	return s
+}
+
+func (s *Server) setupRouter() *gin.Engine {
 	r := gin.Default()
-
-	// --- EXPOSE METRICS ENDPOINT ---
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	r.GET("/healthz", s.handleHealthz)
+	r.POST("/ingest", s.handleIngest)
+	return r
+}
 
-	// 3. Define the "Ingest" endpoint
-	r.POST("/ingest", func(c *gin.Context) {
-		start := time.Now()
-		var entry LogEntry
+func (s *Server) handleHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
 
-		// Check if the incoming data is a valid LogEntry
-		if err := c.ShouldBindJSON(&entry); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid log format"})
+func (s *Server) handleIngest(c *gin.Context) {
+	start := time.Now()
+
+	var entry LogEntry
+	if err := c.ShouldBindJSON(&entry); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log format"})
+		return
+	}
+
+	if entry.Service == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "service is required"})
+		return
+	}
+	if entry.Level == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "level is required"})
+		return
+	}
+
+	if entry.Timestamp == 0 {
+		entry.Timestamp = time.Now().Unix()
+	}
+
+	val, err := json.Marshal(entry)
+	if err != nil {
+		ingestionLatency.WithLabelValues("error").Observe(time.Since(start).Seconds())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to serialize log entry"})
+		return
+	}
+
+	// Use the request's context with a timeout so a slow/broken Kafka doesn't
+	// hold the connection open indefinitely.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	err = s.writer.WriteMessages(ctx,
+		kafka.Message{
+			Key:   []byte(entry.Service),
+			Value: val,
+		},
+	)
+
+	duration := time.Since(start).Seconds()
+	if err != nil {
+		ingestionLatency.WithLabelValues("error").Observe(duration)
+		if errors.Is(err, context.DeadlineExceeded) {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "kafka write timed out"})
 			return
 		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send to kafka"})
+		return
+	}
 
-		// Auto-fill timestamp if missing
-		if entry.Timestamp == 0 {
-			entry.Timestamp = time.Now().Unix()
+	ingestionLatency.WithLabelValues("success").Observe(duration)
+	logsIngested.WithLabelValues(entry.Service, entry.Level).Inc()
+	c.JSON(http.StatusOK, gin.H{"status": "log received"})
+}
+
+func (s *Server) Start(addr string) error {
+	s.http = &http.Server{
+		Addr:    addr,
+		Handler: s.router,
+	}
+	return s.http.ListenAndServe()
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.http.Shutdown(ctx)
+}
+
+func main() {
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	if kafkaBroker == "" {
+		kafkaBroker = "localhost:9092"
+	}
+
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(kafkaBroker),
+		Topic:    "raw-logs",
+		Balancer: &kafka.Hash{},
+	}
+
+	srv := NewServer(writer)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		addr := ":8080"
+		if v := os.Getenv("LISTEN_ADDR"); v != "" {
+			addr = v
 		}
-
-		// Helper: Convert struct back to JSON bytes for Kafka
-		// (In a real app, you might optimize this to avoid double-decoding/encoding)
-		// For now, we just marshal the whole entry to preserve the new fields.
-		val, _ := json.Marshal(entry)
-
-		// Push the log into the Kafka Pipe
-		// Key: Partition by Service so all logs from "auth-service" go to the same shard (Preserve Order)
-		err := writer.WriteMessages(context.Background(),
-			kafka.Message{
-				Key:   []byte(entry.Service),
-				Value: val,
-			},
-		)
-
-		duration := time.Since(start).Seconds()
-
-		if err != nil {
-			// Record failure metric
-			ingestionLatency.WithLabelValues("error").Observe(duration)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send to Kafka"})
-			return
+		log.Printf("starting server on %s", addr)
+		if err := srv.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
 		}
+	}()
 
-		// Record success metrics
-		ingestionLatency.WithLabelValues("success").Observe(duration)
-		logsIngested.WithLabelValues(entry.Service, entry.Level).Inc()
+	<-ctx.Done()
+	log.Println("shutting down...")
 
-		c.JSON(http.StatusOK, gin.H{"status": "Log received and sent to pipe!"})
-	})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	// Start the server on port 8080
-	r.Run(":8080")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("forced shutdown: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		log.Printf("kafka writer close error: %v", err)
+	}
+
+	log.Println("shutdown complete")
 }
