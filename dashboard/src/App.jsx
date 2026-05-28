@@ -16,10 +16,10 @@ function App() {
   const fetchLogs = async () => {
     try {
       const response = await axios.post('http://localhost:9200/logs-index/_search', {
-        size: 50, // Increased size for better feed
-        sort: [{ timestamp: { order: "desc", unmapped_type: "boolean" } }]
+        size: 50,
+        sort: [{ timestamp_log: { order: "desc", unmapped_type: "boolean" } }]
       });
-      const hits = response.data.hits.hits.map(hit => hit._source);
+      const hits = response.data.hits.hits.map(hit => ({ ...hit._source, _id: hit._id }));
       setLogs(hits);
 
       // Update basic stats
@@ -105,7 +105,7 @@ function App() {
       <div className="fade-in">
         {logs.map((log, index) => (
           <LogCard
-            key={index}
+            key={log._id || index}
             log={log}
             isSelected={selectedLog === log}
             onClick={() => setSelectedLog(log)}

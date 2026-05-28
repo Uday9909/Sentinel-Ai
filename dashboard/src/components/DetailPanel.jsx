@@ -82,7 +82,7 @@ const DetailPanel = ({ log, onClose }) => {
 
             <DetailRow
                 label="Timestamp"
-                value={new Date(log.timestamp * 1000).toLocaleString()}
+                value={new Date((log.timestamp_log || log.timestamp) * 1000).toLocaleString()}
                 mono
             />
 

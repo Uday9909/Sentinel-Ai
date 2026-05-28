@@ -21,9 +21,9 @@ const LogCard = ({ log, isSelected, onClick }) => {
     const Icon = config.icon;
     const isAnomaly = log.is_anomaly;
 
-    // Format timestamp (just time for the card, e.g., 14:05:22)
-    const timeStr = log.timestamp
-        ? new Date(log.timestamp * 1000).toLocaleTimeString([], { hour12: false })
+    const ts = log.timestamp_log || log.timestamp;
+    const timeStr = ts
+        ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false })
         : '--:--:--';
 
     return (
