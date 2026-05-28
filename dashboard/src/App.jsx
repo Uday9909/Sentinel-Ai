@@ -15,11 +15,8 @@ function App() {
 
   const fetchLogs = async () => {
     try {
-      const response = await axios.post('http://localhost:9200/logs-index/_search', {
-        size: 50,
-        sort: [{ timestamp_log: { order: "desc", unmapped_type: "boolean" } }]
-      });
-      const hits = response.data.hits.hits.map(hit => ({ ...hit._source, _id: hit._id }));
+      const response = await axios.get('/api/logs', { params: { size: 50 } });
+      const hits = response.data;
       setLogs(hits);
 
       // Update basic stats

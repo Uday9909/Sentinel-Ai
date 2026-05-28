@@ -79,6 +79,16 @@ services:
       - elasticsearch
     restart: unless-stopped
 
+  dashboard:
+    build:
+      context: ./dashboard
+    ports: ["3001:3001"]
+    environment:
+      ES_URL: http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
 volumes:
   zookeeper_data:
   zookeeper_log:
