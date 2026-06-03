@@ -32,8 +32,8 @@ function App() {
   };
 
   useEffect(() => {
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 2000); // Faster polling for "real-time" feel
+    fetchLogs(); // eslint-disable-line react-hooks/set-state-in-effect
+    const interval = setInterval(fetchLogs, 2000);
     return () => clearInterval(interval);
   }, []);
 

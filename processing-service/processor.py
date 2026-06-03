@@ -1,19 +1,19 @@
 import json
-import signal
-import time
 import os
+import signal
 import threading
+import time
 from collections import deque
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from kafka import KafkaConsumer
-from elasticsearch import Elasticsearch
+import ollama
 from drain3 import TemplateMiner
 from drain3.template_miner_config import TemplateMinerConfig
-from sklearn.ensemble import IsolationForest
-from prometheus_client import start_http_server, Counter, Histogram
-import ollama
+from elasticsearch import Elasticsearch
 from joblib import dump, load
+from kafka import KafkaConsumer
+from prometheus_client import Counter, Histogram, start_http_server
+from sklearn.ensemble import IsolationForest
 
 # --- CONFIG ---
 _model_dir = os.getenv("MODEL_DIR", "")

@@ -4,22 +4,20 @@ Run with:  pytest test_processor.py -v
 """
 import time
 from collections import deque
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 from sklearn.ensemble import IsolationForest
-import numpy as np
 
 from processor import (
-    has_keyword_indicator,
-    check_rate_anomaly,
-    train_if_needed,
-    run_ai_analysis,
-    MODEL_PATH,
-    TRAIN_INTERVAL,
     OLLAMA_COOLDOWN_SEC,
+    TRAIN_INTERVAL,
+    check_rate_anomaly,
+    has_keyword_indicator,
+    run_ai_analysis,
+    train_if_needed,
 )
-
 
 # ---------------------------------------------------------------------------
 # has_keyword_indicator
@@ -46,9 +44,9 @@ def test_has_keyword_indicator(text, expected):
 
 def _trained_model():
     """Return a small IsolationForest fitted on low-rate data."""
-    X = np.array([[1.0], [2.0], [1.5], [3.0], [2.5], [1.8], [0.5], [4.0], [2.2], [1.2]])
+    x = np.array([[1.0], [2.0], [1.5], [3.0], [2.5], [1.8], [0.5], [4.0], [2.2], [1.2]])
     model = IsolationForest(contamination=0.05, random_state=42)
-    model.fit(X)
+    model.fit(x)
     return model
 
 
@@ -146,7 +144,12 @@ def test_run_ai_analysis_ollama_returns_analysis():
 
     with patch("processor._ollama_client.chat") as mock_chat:
         mock_chat.return_value = {
-            "message": {"content": "Database pool exhausted. Fix: restart pool, increase max connections."}
+            "message": {
+                "content": (
+                    "Database pool exhausted. Fix: restart pool, "
+                    "increase max connections."
+                )
+            }
         }
         is_anom, summary, new_failure = run_ai_analysis(
             "DB connection error", log_data, past_failure
