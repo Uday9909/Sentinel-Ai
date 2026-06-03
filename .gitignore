@@ -29,9 +29,17 @@ ingestion-service/ingestion-service
 
 # Python / Processing
 processing-service/venv/
+processing-service/.venv/
 processing-service/__pycache__/
 *.pyc
+*.joblib
 
 # Docker / Data
 *.gz
-.gitnexus
+
+# Test / Coverage artifacts
+coverage.out
+coverage.xml
+junit.xml
+coverage/
+.nyc_output/
