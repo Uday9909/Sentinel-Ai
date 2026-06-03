@@ -1,8 +1,8 @@
-kafka-python
-elasticsearch
-drain3
-scikit-learn
-ollama
-numpy
-requests
-prometheus-client
+kafka-python==2.0.6
+elasticsearch==8.17.0
+drain3==0.9.11
+scikit-learn==1.6.1
+prometheus-client==0.21.1
+ollama==0.4.7
+joblib==1.4.2
+regex==2024.11.6

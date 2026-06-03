@@ -1,7 +1,10 @@
 import json
+import signal
 import time
 import os
+import threading
 from collections import deque
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from kafka import KafkaConsumer
 from elasticsearch import Elasticsearch
@@ -13,10 +16,50 @@ import ollama
 from joblib import dump, load
 
 # --- CONFIG ---
-MODEL_PATH = "isolation_forest.joblib"
+_model_dir = os.getenv("MODEL_DIR", "")
+if _model_dir:
+    os.makedirs(_model_dir, exist_ok=True)
+    MODEL_PATH = os.path.join(_model_dir, "isolation_forest.joblib")
+else:
+    MODEL_PATH = os.getenv("MODEL_PATH", "isolation_forest.joblib")
+
 TRAIN_INTERVAL = 60          # seconds between model retrains
 ANOMALY_RATE_FLOOR = 20.0    # minimum logs/sec to consider rate-based anomaly
 OLLAMA_COOLDOWN_SEC = 30     # skip LLM if it failed within this many seconds
+
+# Ollama LLM client — host is configurable for K8s / Docker networking
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+_ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+
+# ---------------------------------------------------------------------------
+# Health check server (port 8002) for Kubernetes liveness / readiness probes
+# ---------------------------------------------------------------------------
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal handler that responds to GET /healthz with 200 OK."""
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002
+        """Suppress default stderr logging for health checks."""
+        pass
+
+
+def start_health_server(port: int = 8002) -> None:
+    """Start a background HTTP server for K8s health probes."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health check server running on port {port}")
 
 # --- PROMETHEUS METRICS ---
 LOGS_PROCESSED = Counter('logs_processed_total', 'Total logs consumed from Kafka')
@@ -72,7 +115,7 @@ def run_ai_analysis(log_text, log_data, last_failure_time):
         return True, "AI Analysis Unavailable (Ollama cooldown)", last_failure_time
 
     try:
-        response = ollama.chat(model='llama3.2:1b', messages=[
+        response = _ollama_client.chat(model='llama3.2:1b', messages=[
             {
                 'role': 'system',
                 'content': (
@@ -126,6 +169,8 @@ def main():
     start_http_server(8001)
     print("Metrics Server running on port 8001")
 
+    start_health_server(8002)
+
     log_timestamps = deque(maxlen=100)
     rate_history = deque(maxlen=50)
 
@@ -140,75 +185,88 @@ def main():
     last_train_time = time.time()
     last_ollama_failure = 0.0
 
-    for message in consumer:
-        start_time = time.time()
-        LOGS_PROCESSED.inc()
+    # --- Graceful shutdown ---
+    def handle_sigterm(signum, frame):
+        print("\nShutdown requested...")
+        raise KeyboardInterrupt()
 
-        # --- Parse ---
-        try:
-            log_data = json.loads(message.value)
-            if isinstance(log_data, str):
-                log_text = log_data
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
+    try:
+        for message in consumer:
+            start_time = time.time()
+            LOGS_PROCESSED.inc()
+
+            # --- Parse ---
+            try:
+                log_data = json.loads(message.value)
+                if isinstance(log_data, str):
+                    log_text = log_data
+                    log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+                else:
+                    log_text = log_data.get("message", "")
+            except json.JSONDecodeError:
+                log_text = message.value
                 log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-            else:
-                log_text = log_data.get("message", "")
-        except json.JSONDecodeError:
-            log_text = message.value
-            log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
 
-        # --- Template mining (Drain3) ---
-        template_result = template_miner.add_log_message(log_text)
-        cluster_id = template_result.cluster_id
+            # --- Template mining (Drain3) ---
+            template_result = template_miner.add_log_message(log_text)
+            cluster_id = template_result.cluster_id
 
-        # --- Log rate (sliding window) ---
-        current_time = time.time()
-        log_timestamps.append(current_time)
+            # --- Log rate (sliding window) ---
+            current_time = time.time()
+            log_timestamps.append(current_time)
 
-        logs_per_sec = 0.0
-        if len(log_timestamps) > 1:
-            time_span = log_timestamps[-1] - log_timestamps[0]
-            if time_span > 0:
-                logs_per_sec = len(log_timestamps) / time_span
-                rate_history.append([logs_per_sec])
+            logs_per_sec = 0.0
+            if len(log_timestamps) > 1:
+                time_span = log_timestamps[-1] - log_timestamps[0]
+                if time_span > 0:
+                    logs_per_sec = len(log_timestamps) / time_span
+                    rate_history.append([logs_per_sec])
 
-        # --- ANOMALY DETECTION ---
-        # Each detector runs independently — no single check short-circuits the others.
-        keyword_anomaly = has_keyword_indicator(log_text)
+            # --- ANOMALY DETECTION ---
+            # Each detector runs independently — no single check short-circuits the others.
+            keyword_anomaly = has_keyword_indicator(log_text)
 
-        model, last_train_time = train_if_needed(model, rate_history, last_train_time)
-        rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
+            model, last_train_time = train_if_needed(model, rate_history, last_train_time)
+            rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
 
-        is_anomaly = keyword_anomaly or rate_anomaly
+            is_anomaly = keyword_anomaly or rate_anomaly
 
-        # --- AI ANALYSIS (only for anomalies) ---
-        ai_summary = "Normal"
-        if is_anomaly:
-            ANOMALIES_DETECTED.inc()
-            print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
-            is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
-                log_text, log_data, last_ollama_failure
-            )
+            # --- AI ANALYSIS (only for anomalies) ---
+            ai_summary = "Normal"
+            if is_anomaly:
+                ANOMALIES_DETECTED.inc()
+                print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
+                is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
+                    log_text, log_data, last_ollama_failure
+                )
 
-        # --- Persist to Elasticsearch ---
-        document = {
-            "message": log_text,
-            "service": log_data.get("service", "unknown"),
-            "level": log_data.get("level", "unknown"),
-            "trace_id": log_data.get("trace_id", ""),
-            "host": log_data.get("host", ""),
-            "timestamp_log": log_data.get("timestamp", 0),
-            "is_anomaly": is_anomaly,
-            "ai_explanation": ai_summary,
-            "cluster_id": cluster_id,
-            "timestamp_processed": time.time(),
-        }
-        try:
-            es.index(index="logs-index", document=document)
-        except Exception as e:
-            ES_WRITE_ERRORS.inc()
-            print(f"ES write failed: {e}")
+            # --- Persist to Elasticsearch ---
+            document = {
+                "message": log_text,
+                "service": log_data.get("service", "unknown"),
+                "level": log_data.get("level", "unknown"),
+                "trace_id": log_data.get("trace_id", ""),
+                "host": log_data.get("host", ""),
+                "timestamp_log": log_data.get("timestamp", 0),
+                "is_anomaly": is_anomaly,
+                "ai_explanation": ai_summary,
+                "cluster_id": cluster_id,
+                "timestamp_processed": time.time(),
+            }
+            try:
+                es.index(index="logs-index", document=document)
+            except Exception as e:
+                ES_WRITE_ERRORS.inc()
+                print(f"ES write failed: {e}")
 
-        PROCESSING_TIME.observe(time.time() - start_time)
+            PROCESSING_TIME.observe(time.time() - start_time)
+    except KeyboardInterrupt:
+        print("Shutting down gracefully...")
+    finally:
+        consumer.close()
+        print("Kafka consumer closed.")
 
 
 if __name__ == "__main__":
