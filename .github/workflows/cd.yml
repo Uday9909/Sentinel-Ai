@@ -19,8 +19,6 @@ env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "22"
   REGISTRY: ghcr.io
-  # Lowercase the GitHub actor name for GHCR compatibility
-  IMAGE_TAG_PREFIX: ${{ lower(github.repository_owner) }}
 
 permissions:
   contents: read
@@ -181,8 +179,10 @@ jobs:
       - name: Generate image tags
         id: tags
         run: |
-          BASE="${{ env.REGISTRY }}/${{ env.IMAGE_TAG_PREFIX }}/sentinel-${{ matrix.service.name }}"
-          echo "tags=${BASE}:${{ github.sha }},${BASE}:latest" >> $GITHUB_OUTPUT
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          OWNER="${OWNER@L}"
+          BASE="${{ env.REGISTRY }}/${OWNER}/sentinel-${{ matrix.service.name }}"
+          echo "tags=${BASE}:${{ github.sha }},${BASE}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ${{ matrix.service.name }}
         uses: docker/build-push-action@v6
