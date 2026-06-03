@@ -42,7 +42,7 @@ services:
     image: prom/prometheus
     ports: ["9090:9090"]
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     image: grafana/grafana
@@ -50,8 +50,8 @@ services:
     depends_on: [prometheus]
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
 
   # -----------------------------------------------------------
   # Application services
@@ -70,13 +70,25 @@ services:
   processing-service:
     build:
       context: ./processing-service
-    ports: ["8001:8001"]
+    ports:
+      - "8001:8001"
+      - "8002:8002"
     environment:
       KAFKA_BROKER: kafka:9092
       ES_URL: http://elasticsearch:9200
+      OLLAMA_HOST: http://ollama:11434
+      MODEL_PATH: /app/data/isolation_forest.joblib
     depends_on:
       - kafka
       - elasticsearch
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
   dashboard:
@@ -95,3 +107,5 @@ volumes:
   kafka_data:
   es_data:
   grafana_data:
+  ollama_data:
+
