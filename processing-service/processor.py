@@ -211,7 +211,7 @@ def main():
 
             # --- Template mining (Drain3) ---
             template_result = template_miner.add_log_message(log_text)
-            cluster_id = template_result.cluster_id
+            cluster_id = template_result.get("cluster_id", 0)
 
             # --- Log rate (sliding window) ---
             current_time = time.time()
