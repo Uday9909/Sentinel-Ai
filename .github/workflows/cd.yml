@@ -20,7 +20,7 @@ env:
   NODE_VERSION: "22"
   REGISTRY: ghcr.io
   # Lowercase the GitHub actor name for GHCR compatibility
-  IMAGE_TAG_PREFIX: ${{ github.repository_owner }}
+  IMAGE_TAG_PREFIX: ${{ lower(github.repository_owner) }}
 
 permissions:
   contents: read
