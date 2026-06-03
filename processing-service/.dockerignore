@@ -1,0 +1,10 @@
+.git
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+*.joblib
+Dockerfile
+.dockerignore
+test_processor.py

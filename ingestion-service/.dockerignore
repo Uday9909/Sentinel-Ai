@@ -1,0 +1,11 @@
+.git
+*.log
+*.exe
+ingestion-server
+ingestion-service
+bin/
+tmp/
+Dockerfile
+.dockerignore
+*_test.go
+README.md
