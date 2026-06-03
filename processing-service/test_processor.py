@@ -3,7 +3,6 @@
 Run with:  pytest test_processor.py -v
 """
 import time
-import pickle
 from collections import deque
 from unittest.mock import patch, MagicMock
 
@@ -128,7 +127,7 @@ def test_run_ai_analysis_ollama_returns_normal():
     log_data = {"service": "test"}
     past_failure = time.time() - OLLAMA_COOLDOWN_SEC - 10  # well past cooldown
 
-    with patch("processor.ollama.chat") as mock_chat:
+    with patch("processor._ollama_client.chat") as mock_chat:
         mock_chat.return_value = {
             "message": {"content": "Normal"}
         }
@@ -145,7 +144,7 @@ def test_run_ai_analysis_ollama_returns_analysis():
     log_data = {"service": "test"}
     past_failure = time.time() - OLLAMA_COOLDOWN_SEC - 10
 
-    with patch("processor.ollama.chat") as mock_chat:
+    with patch("processor._ollama_client.chat") as mock_chat:
         mock_chat.return_value = {
             "message": {"content": "Database pool exhausted. Fix: restart pool, increase max connections."}
         }
@@ -162,7 +161,7 @@ def test_run_ai_analysis_ollama_exception():
     log_data = {"service": "test"}
     past_failure = time.time() - OLLAMA_COOLDOWN_SEC - 10
 
-    with patch("processor.ollama.chat", side_effect=Exception("Ollama down")):
+    with patch("processor._ollama_client.chat", side_effect=Exception("Ollama down")):
         is_anom, summary, new_failure = run_ai_analysis(
             "some error", log_data, past_failure
         )
