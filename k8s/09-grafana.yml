@@ -210,11 +210,30 @@ spec:
             - containerPort: 3000
           env:
             - name: GF_SECURITY_ADMIN_USER
-              value: "admin"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: username
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "admin"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+          # ---------------------------------------------------------------
+          # NOTE: Create the grafana-admin Secret before deploying:
+          #
+          #   kubectl -n sentinel create secret generic grafana-admin \
+          #     --from-literal=username=admin \
+          #     --from-literal=password=<your-password>
+          #
+          # For dev-only convenience, you can create it with default creds:
+          #
+          #   kubectl -n sentinel create secret generic grafana-admin \
+          #     --from-literal=username=admin \
+          #     --from-literal=password=admin
+          # ---------------------------------------------------------------
           resources:
             requests:
               memory: "128Mi"

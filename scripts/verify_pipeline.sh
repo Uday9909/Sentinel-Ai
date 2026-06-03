@@ -37,13 +37,13 @@ test -z "$(gofmt -s -d .)" && pass "gofmt -s (no diffs)" || {
 
 stage "Lint: Python (processing-service)"
 cd "$ROOT/processing-service"
-pip install -q ruff 2>/dev/null
+pip install -q ruff
 ruff check . && pass "ruff" || fail "ruff"
 
 stage "Lint: Dashboard"
 cd "$ROOT/dashboard"
-npm ci --silent 2>/dev/null
-npm run lint 2>/dev/null && pass "eslint" || fail "eslint"
+npm ci --silent
+npm run lint && pass "eslint" || fail "eslint"
 
 # ---------------------------------------------------------------------------
 # STAGE 2: Test with coverage
@@ -57,7 +57,7 @@ pass "go test"
 
 stage "Test: Python"
 cd "$ROOT/processing-service"
-pip install -q pytest pytest-cov 2>/dev/null
+pip install -q pytest pytest-cov
 pytest -v --cov=processor --cov-report=term --junitxml=junit.xml test_processor.py 2>&1 | tail -10
 pass "pytest"
 

@@ -42,17 +42,17 @@ fi
 
 # --- 2. CI workflow has all required jobs ---
 if [ -f .github/workflows/ci.yml ]; then
-    REQUIRED_CI_JOBS=("lint-go" "lint-py" "lint-js" "test-go" "test-py" "test-js" "build-go" "build-py" "build-js" "smoke-test")
+    REQUIRED_CI_JOBS=("lint-go" "lint-py" "lint-js" "test-go" "test-python" "test-node" "validate-manifests" "build-images")
     for job in "${REQUIRED_CI_JOBS[@]}"; do
         grep -q "  $job:" .github/workflows/ci.yml && pass "CI job: $job" || fail "CI job: $job (missing)"
     done
 fi
 
-# --- 3. CD workflow has push jobs ---
+# --- 3. CD workflow has build-and-push job ---
 if [ -f .github/workflows/cd.yml ]; then
-    grep -q "build-push-go" .github/workflows/cd.yml \
-        && pass "CD job: build-push-go" \
-        || fail "CD job: build-push-go (missing)"
+    grep -q "build-and-push" .github/workflows/cd.yml \
+        && pass "CD job: build-and-push" \
+        || fail "CD job: build-and-push (missing)"
 fi
 
 # --- 4. .dockerignore files exist for all services ---
