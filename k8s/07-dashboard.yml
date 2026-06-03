@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Dashboard — Deployment + Service
+# React + Vite frontend served by Express (server.js), proxies ES queries.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: sentinel
+  labels:
+    app: dashboard
+spec:
+  ports:
+    - port: 3001
+      name: http
+  selector:
+    app: dashboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: sentinel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          # PRODUCTION NOTE: Replace with ECR URI, e.g.:
+          #   <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/sentinel/dashboard:latest
+          image: sentinel/dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+          env:
+            - name: ES_URL
+              value: "http://elasticsearch:9200"
+            - name: PORT
+              value: "3001"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 5

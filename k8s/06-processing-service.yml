@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# Processing Service — Deployment + Service + HPA
+# Python-based Kafka consumer that performs anomaly detection (IsolationForest)
+# and LLM-powered RCA (Ollama), then indexes results to Elasticsearch.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: processing-service
+  namespace: sentinel
+  labels:
+    app: processing-service
+spec:
+  ports:
+    - port: 8001
+      name: metrics
+    - port: 8002
+      name: health
+  selector:
+    app: processing-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processing-service
+  namespace: sentinel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: processing-service
+  template:
+    metadata:
+      labels:
+        app: processing-service
+    spec:
+      containers:
+        - name: processing-service
+          # PRODUCTION NOTE: Replace with ECR URI, e.g.:
+          #   <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/sentinel/processing-service:latest
+          image: sentinel/processing-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+              name: metrics
+            - containerPort: 8002
+              name: health
+          env:
+            - name: KAFKA_BROKER
+              value: "kafka:9092"
+            - name: ES_URL
+              value: "http://elasticsearch:9200"
+            - name: OLLAMA_HOST
+              value: "http://ollama:11434"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: processing-service-hpa
+  namespace: sentinel
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: processing-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

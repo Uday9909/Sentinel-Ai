@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# EKS Cluster Configuration for eksctl
+# Usage: eksctl create cluster -f aws/eksctl-cluster.yml
+# ---------------------------------------------------------------------------
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: sentinel-cluster
+  region: us-east-1
+  version: "1.30"
+
+# IAM configuration for the cluster
+iam:
+  withOIDC: true
+
+# Managed node group
+managedNodeGroups:
+  - name: general
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 4
+    volumeSize: 20
+    labels:
+      role: general
+    iam:
+      withAddonPolicies:
+        autoScaler: true
+        cloudWatch: true
+        albIngress: true
+    tags:
+      Project: sentinel-ai
+      Environment: production
+
+# EKS add-ons
+addons:
+  - name: vpc-cni
+    version: latest
+  - name: coredns
+    version: latest
+  - name: kube-proxy
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+    wellKnownPolicies:
+      ebsCSIController: true

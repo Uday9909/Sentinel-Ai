@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# Ollama Deployment + Service
+# Provides local LLM inference (llama3.2:1b) for Root Cause Analysis.
+#
+# PRODUCTION NOTE:
+#   - For GPU acceleration, use node selectors targeting GPU instances
+#     (e.g., g5.xlarge) and set nvidia.com/gpu resource limits.
+#   - Consider replacing with AWS Bedrock for managed LLM inference
+#     to avoid GPU node costs and model management overhead.
+#   - The initContainer pulls the model on first deploy; subsequent
+#     restarts use the cached model in the emptyDir volume.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: sentinel
+  labels:
+    app: ollama
+spec:
+  ports:
+    - port: 11434
+      name: http
+  selector:
+    app: ollama
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: sentinel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      # initContainer pulls the required model before the main container starts
+      initContainers:
+        - name: pull-model
+          image: ollama/ollama:latest
+          command:
+            - sh
+            - -c
+            - |
+              ollama serve &
+              sleep 5
+              ollama pull llama3.2:1b
+              pkill ollama
+          volumeMounts:
+            - name: ollama-cache
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: ollama-cache
+              mountPath: /root/.ollama
+          resources:
+            # PRODUCTION NOTE: For GPU nodes, add:
+            #   limits:
+            #     nvidia.com/gpu: 1
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        # PRODUCTION NOTE: Replace emptyDir with a PVC for model persistence
+        # across pod restarts (avoids re-pulling the model on every restart).
+        - name: ollama-cache
+          emptyDir: {}
