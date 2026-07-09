@@ -1,14 +1,32 @@
-# Sentinel AI
+# 🛰️ Sentinel AI
 
-**Real-time Log Intelligence & Anomaly Detection Platform**
+**Open-source real-time anomaly detection and AI-powered root cause analysis for modern observability.**
 
-Sentinel ingests logs, detects anomalies in real-time using unsupervised machine learning, and generates instant Root Cause Analysis (RCA) via local LLM inference.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/Uday9909/Sentinel-Ai?style=flat-square)](https://github.com/Uday9909/Sentinel-Ai/stargazers)
+[![Docker Build](https://img.shields.io/badge/Docker%20Build-Passing-brightgreen?style=flat-square)](https://github.com/Uday9909/Sentinel-Ai/actions)
+[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Python Version](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python)](https://python.org/)
+
+Sentinel ingests logs, detects anomalies in real-time using unsupervised machine learning (Isolation Forest), and generates instant Root Cause Analysis (RCA) via local LLM inference (Ollama).
 
 ![Architecture](./docs/sentinel-architecture.jpeg)
 
 ---
 
+## Why Sentinel?
+
+Most observability platforms are expensive, cloud-locked, and opaque. Sentinel is different:
+
+- **🔒 Local LLM, no data leaks** — RCA runs on your machine via Ollama. No logs leave your network. No per-token API costs.
+- **☁️ No vendor lock-in** — No Datadog, no New Relic, no Grafana Cloud dependency. Everything runs on Docker Compose on your own hardware.
+- **⚡ Kafka-native streaming** — Real-time ingestion through Kafka means backpressure, replay, and partitioning come free. Your pipeline doesn't drop logs under load.
+
+---
+
 ## Architecture
+
+Sentinel is built as a streaming pipeline with four main stages: ingestion, messaging, AI processing, and visualization.
 
 ```mermaid
 graph LR
@@ -31,20 +49,25 @@ graph LR
     end
 ```
 
+*Pipeline flow: Producer services send logs to the Go ingestion API, which publishes them to Kafka. The Python processor consumes the stream, trains an Isolation Forest model for anomaly detection, and queries Ollama for RCA on anomalies. Results are indexed in Elasticsearch and surfaced in the React dashboard. Prometheus scrapes metrics from both the ingestion and processing services, visualized in Grafana.*
+
 ## Stack
 
-| Component   | Language          | Role                             |
-|-------------|-------------------|----------------------------------|
-| Ingestion   | Go (Gin)          | HTTP API → Kafka (`:8080`)       |
-| Processor   | Python 3          | Drain3 + IsolationForest + LLM → ES |
-| Dashboard   | React + Vite      | Real-time log feed (`:5173` dev) |
-| API Server  | Node/Express      | Backend proxy to ES (`:3001`)    |
-| Intelligence| Ollama Llama 3.2  | Local LLM for root cause analysis|
-| Storage     | Elasticsearch     | Indexed log storage              |
-| Monitoring  | Prometheus + Grafana | Metrics & visualization        |
-| Streaming   | Apache Kafka      | Event buffering & backpressure   |
+| Component | Tech | Responsibility |
+|-----------|------|----------------|
+| **Ingestion** | Go (Gin) | HTTP API → Kafka (`:8080`) |
+| **Processor** | Python 3 | Drain3 + Isolation Forest + LLM → ES |
+| **Dashboard** | React + Vite | Real-time log feed (`:5173` dev) |
+| **Intelligence** | Ollama (Llama 3.2) | Local LLM for root cause analysis |
+| **Storage** | Elasticsearch | Indexed log storage and search |
+| **Monitoring** | Prometheus + Grafana | Metrics collection and visualization |
+| **Streaming** | Apache Kafka | Event buffering, backpressure, and replay |
+
+---
 
 ## Quick Start
+
+### Docker Compose (single host)
 
 ```bash
 docker compose up -d
@@ -53,53 +76,53 @@ docker compose up -d
 docker exec -it sentinel-ai-ollama-1 ollama pull llama3.2:1b
 ```
 
-| Service           | URL                       |
-|-------------------|---------------------------|
-| Dashboard         | http://localhost:3001      |
-| Grafana           | http://localhost:3000      |
-| Prometheus        | http://localhost:9090      |
-| Ingestion API     | http://localhost:8080      |
+| Service | URL |
+|---------|-----|
+| Dashboard | http://localhost:3001 |
+| Grafana | http://localhost:3000 |
+| Prometheus | http://localhost:9090 |
+| Ingestion API | http://localhost:8080 |
 
 ### Development (without Docker)
 
 ```bash
-# Ingestion
+# 1. Start infrastructure
+docker-compose up -d
+
+# 2. Ingestion API
 cd ingestion-service && go run main.go
 
-# Processor
+# 3. AI Processor
 cd processing-service
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt && python processor.py
 
-# Dashboard
+# 4. Dashboard
 cd dashboard && npm install && npm run dev
 ```
+
+> **Prerequisites**: Go 1.21+, Python 3.9+, Node.js 18+, Ollama with `llama3.2:1b`.
+
+---
 
 ## Testing
 
 ```bash
-# Go (8 tests)
+# Go
 cd ingestion-service && go test -v -race ./...
 
-# Python (20 tests)
+# Python
 cd processing-service && pip install pytest && pytest -v
 
-# Dashboard (20 tests)
-cd dashboard && npm test
-
-# Integration — K8s manifests, Dockerfile validation
-pip install pytest pyyaml && pytest tests/integration/ -v
+# All checks via Makefile
+make test
 ```
 
-CI runs all tests on every push via GitHub Actions.
+CI runs all checks on every push via GitHub Actions.
+
+---
 
 ## Deployment
-
-### Docker Compose (single host)
-
-```bash
-docker compose up -d
-```
 
 ### Kubernetes
 
@@ -113,6 +136,8 @@ kubectl apply -k k8s/
 ### AWS EKS
 
 See [aws/README.md](aws/README.md) — EKS cluster with ECR, ALB ingress.
+
+---
 
 ## Demo
 
@@ -133,12 +158,14 @@ python3 scripts/demo_script.py
 ├── aws/                     AWS EKS deployment configs
 ├── .github/workflows/       CI/CD (GitHub Actions)
 ├── scripts/                 Demo & verification scripts
-├── tests/                   Integration tests
 └── docker-compose.yml       Full-stack orchestration
 ```
 
+---
+
 ## Progress
 
+- [x] Core pipeline (ingestion → Kafka → ML → ES → dashboard)
 - [x] Prometheus/Grafana integration
 - [x] Kubernetes manifests (Kustomize)
 - [x] AWS EKS deployment
@@ -148,3 +175,19 @@ python3 scripts/demo_script.py
 - [ ] Distributed tracing (Jaeger)
 - [ ] Multi-tenant log isolation
 - [ ] AWS Bedrock (alternative to Ollama)
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, the PR process, and good first issues. Check out [GOOD_FIRST_ISSUES.md](GOOD_FIRST_ISSUES.md) for starter-friendly tasks.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+---
+
+*Built with Go, Python, Kafka, Elasticsearch, Ollama, and React.*
