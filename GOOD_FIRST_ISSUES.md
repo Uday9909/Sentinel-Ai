@@ -1,5 +1,9 @@
 # Good First Issues
 
+**Last reviewed:** 2026-07-10
+
+Live issues: https://github.com/Uday9909/Sentinel-Ai/labels/good%20first%20issue
+
 Welcome! These issues are specifically designed for new contributors to Sentinel. Each one is well-scoped, has clear acceptance criteria, and comes with a mentor available in the issue comments.
 
 ---
@@ -18,9 +22,6 @@ Welcome! These issues are specifically designed for new contributors to Sentinel
 - [ ] All existing components render correctly in both modes
 
 ---
-
-### 2. Add Docker health checks for Kafka, Elasticsearch, and Ollama
-**Difficulty**: Beginner | **Area**: DevOps
 
 **Description**: The `docker-compose.yml` currently lacks health checks. Add `healthcheck` blocks to the Kafka, Elasticsearch, and Prometheus services so Docker can report when they're truly ready.
 
@@ -75,11 +76,6 @@ Welcome! These issues are specifically designed for new contributors to Sentinel
 - [ ] Error handling if Docker is not running
 
 ---
-
-### 6. Add Prometheus metrics endpoint to the Go ingestion service
-**Difficulty**: Beginner–Intermediate | **Area**: Backend, Observability
-
-**Description**: The ingestion service already registers Prometheus metrics (`logs_ingested_total`, `ingestion_duration_seconds`) but could expose more detailed metrics. Add a counter for per-status-code response counts and a gauge for Kafka writer queue depth.
 
 **Files to touch**: `ingestion-service/main.go`
 
