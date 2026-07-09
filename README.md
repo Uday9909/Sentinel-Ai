@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/Uday9909/Sentinel-Ai?style=flat-square)](https://github.com/Uday9909/Sentinel-Ai/stargazers)
 [![Docker Build](https://img.shields.io/badge/Docker%20Build-Passing-brightgreen?style=flat-square)](https://github.com/Uday9909/Sentinel-Ai/actions)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
-[![Python Version](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python)](https://python.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Python Version](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python)](https://python.org/)
 
 Sentinel ingests logs, detects anomalies in real-time using unsupervised machine learning (Isolation Forest), and generates instant Root Cause Analysis (RCA) via local LLM inference (Ollama).
 
@@ -101,7 +101,7 @@ pip install -r requirements.txt && python processor.py
 cd dashboard && npm install && npm run dev
 ```
 
-> **Prerequisites**: Go 1.21+, Python 3.9+, Node.js 18+, Ollama with `llama3.2:1b`.
+> **Prerequisites**: Go 1.25+, Python 3.11+, Node.js 22+, Ollama with `llama3.2:1b`.
 
 ---
 
