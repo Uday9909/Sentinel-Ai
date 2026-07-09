@@ -82,7 +82,14 @@ ollama pull llama3.2:1b
 
    Visit `http://localhost:5173` to see the dashboard.
 
-6. **Run the demo script** (optional)
+6. **Copy environment variables** (optional)
+
+   ```bash
+   cp .env.example .env
+   # Edit .env as needed for your local setup
+   ```
+
+7. **Run the demo script** (optional)
 
    ```bash
    python3 scripts/demo_script.py
@@ -209,6 +216,19 @@ docs: update API examples in README
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] PR linked to a related issue
 - [ ] Screenshot attached if UI changed
+
+---
+
+## AI-Assisted Contributions
+
+We welcome AI-assisted development, but require disclosure. If you use AI tools (GitHub Copilot, Claude Code, Cursor, etc.) to generate non-trivial code:
+
+1. **Disclose it** in your PR description: "AI-assisted: Used Copilot to scaffold the React component"
+2. **Review it yourself** — AI code can have subtle bugs, security issues, or hallucinated APIs
+3. **Test it** — AI-generated tests might pass for the wrong reasons
+4. **You are responsible** — By submitting, you certify the code is correct and properly licensed
+
+Trivial changes (auto-formatting, variable renames, comment generation) do not need disclosure.
 
 ---
 

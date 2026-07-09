@@ -184,6 +184,14 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for development
 
 ---
 
+## 📋 Changelog
+
+[![Changelog](https://img.shields.io/badge/Changelog-Keep%20a%20Changelog-blue)](./CHANGELOG.md)
+
+See [CHANGELOG.md](./CHANGELOG.md) for a detailed history of changes and releases.
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

@@ -39,7 +39,7 @@ test:
 	cd ingestion-service && go test -v -race -cover ./...
 	@echo ""
 	@echo "Running Python tests..."
-	cd processing-service && python3 -m pytest tests/ -v
+	cd processing-service && python3 -m pytest test_processor.py -v --cov=processor --cov-report=term
 	@echo ""
 	@echo "Building React app..."
 	cd dashboard && npm ci && npm run build
