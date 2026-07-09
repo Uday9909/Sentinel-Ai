@@ -13,7 +13,7 @@ Only the `main` branch receives security updates. Patch releases are cut from `m
 
 We take security seriously. If you discover a vulnerability, please **do not** open a public issue.
 
-Instead, send a detailed report to **`udaybirsingh [at] example.com`** (replace with the maintainer's actual address).
+Instead, send a detailed report to **`writetoudaybir@gmail.com`**.
 
 Please include:
 

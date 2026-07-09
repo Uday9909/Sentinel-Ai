@@ -242,7 +242,7 @@ Check out the [`good first issue`](https://github.com/Uday9909/Sentinel-Ai/issue
 
 - Open a [GitHub Discussion](https://github.com/Uday9909/Sentinel-Ai/discussions) for questions
 - File a [bug report](https://github.com/Uday9909/Sentinel-Ai/issues/new?labels=bug&template=bug_report.yml) for issues
-- Reach out via email: `udaybirsingh [at] example.com` (maintainer, replace with real address)
+- Reach out via email: `writetoudaybir@gmail.com`
 
 ---
 
