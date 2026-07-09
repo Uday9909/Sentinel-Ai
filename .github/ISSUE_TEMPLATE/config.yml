@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "💬 Ask a Question"
+    url: "https://github.com/Uday9909/Sentinel-Ai/discussions"
+    about: "Use Discussions for questions, setup help, or general chat"
+  - name: "📖 Contributing Guide"
+    url: "https://github.com/Uday9909/Sentinel-Ai/blob/main/CONTRIBUTING.md"
+    about: "Read this before opening your first issue or PR"

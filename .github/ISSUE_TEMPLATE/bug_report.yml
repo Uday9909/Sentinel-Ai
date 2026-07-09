@@ -1,108 +1,43 @@
 name: Bug Report
-description: Report a defect or unexpected behavior
+description: Something broke? Tell us what happened.
 title: "[Bug]: "
-labels: ["bug"]
-assignees: []
+labels: ["bug", "triage"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for taking the time to fill out this bug report! Please provide as much detail as possible.
-
   - type: textarea
-    id: description
+    id: what-happened
     attributes:
-      label: Description
-      description: A clear and concise description of the bug
-      placeholder: What happened? What did you expect to happen?
+      label: What happened?
+      description: A clear description of the bug. What did you expect vs what actually happened?
+      placeholder: "I ran `make setup` and the processing service crashed with 'Connection refused' to Elasticsearch..."
     validations:
       required: true
 
   - type: textarea
-    id: reproduction
+    id: steps
     attributes:
-      label: Reproduction Steps
-      description: Step-by-step instructions to reproduce the issue
+      label: Steps to reproduce
+      description: What commands did you run? What config?
       placeholder: |
-        1. Start the ingestion service with `go run main.go`
-        2. Send a POST request to `/ingest` with payload X
-        3. ...
-      value: |
-        1.
-        2.
-        3.
+        1. git clone ...
+        2. docker-compose up -d
+        3. cd ingestion-service && go run main.go
     validations:
       required: true
 
   - type: textarea
-    id: expected
+    id: environment
     attributes:
-      label: Expected Behavior
-      description: What should have happened instead
+      label: Environment
+      description: OS, Go/Python/Node versions, or just paste `docker --version && go version && python3 --version`
+      placeholder: "macOS 14, Go 1.25, Python 3.11, Docker 27.0"
     validations:
-      required: true
-
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual Behavior
-      description: What actually happened (include screenshots if applicable)
-    validations:
-      required: true
-
-  - type: dropdown
-    id: component
-    attributes:
-      label: Affected Component
-      description: Which part of Sentinel is affected?
-      options:
-        - Ingestion Service (Go)
-        - Processing Service (Python)
-        - Dashboard (React)
-        - Infrastructure (Docker / Kafka / ES)
-        - Documentation
-        - Other
-    validations:
-      required: true
-
-  - type: input
-    id: os
-    attributes:
-      label: Operating System
-      placeholder: e.g., macOS 14.3, Ubuntu 22.04
-    validations:
-      required: true
-
-  - type: input
-    id: go-version
-    attributes:
-      label: Go Version (if applicable)
-      placeholder: e.g., 1.21.6
-
-  - type: input
-    id: python-version
-    attributes:
-      label: Python Version (if applicable)
-      placeholder: e.g., 3.11.2
-
-  - type: input
-    id: node-version
-    attributes:
-      label: Node.js Version (if applicable)
-      placeholder: e.g., 18.19.0
+      required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: Relevant Logs
-      description: Copy and paste any relevant logs or error output
+      label: Logs or error output
+      description: Paste any relevant error messages or logs
       render: shell
-
-  - type: checkboxes
-    id: terms
-    attributes:
-      label: Code of Conduct
-      description: By submitting this issue, you agree to follow our Code of Conduct
-      options:
-        - label: I agree to follow this project's Code of Conduct
-          required: true
+    validations:
+      required: false

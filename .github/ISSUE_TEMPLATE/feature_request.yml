@@ -1,70 +1,28 @@
 name: Feature Request
-description: Suggest an idea for Sentinel
+description: Have an idea? We'd love to hear it.
 title: "[Feature]: "
 labels: ["enhancement"]
-assignees: []
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for suggesting a feature! Please describe the problem you're solving and your proposed solution.
-
   - type: textarea
     id: problem
     attributes:
-      label: Problem Statement
-      description: What problem does this feature solve? What pain point does it address?
-      placeholder: "It's frustrating when..."
+      label: What problem are you trying to solve?
+      placeholder: "I want to monitor logs from multiple Kafka clusters but Sentinel only supports one broker..."
     validations:
       required: true
 
   - type: textarea
     id: solution
     attributes:
-      label: Proposed Solution
-      description: Describe the feature you'd like to see implemented
-      placeholder: "I'd like Sentinel to..."
-    validations:
-      required: true
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives Considered
-      description: What alternatives have you considered? Why didn't they work?
-      placeholder: "I considered doing X instead, but..."
-    validations:
-      required: false
-
-  - type: dropdown
-    id: component
-    attributes:
-      label: Affected Component
-      description: Which part of Sentinel would this affect?
-      options:
-        - Ingestion Service (Go)
-        - Processing Service (Python)
-        - Dashboard (React)
-        - Infrastructure (Docker / Kafka / ES)
-        - Documentation
-        - Other / Cross-cutting
+      label: What would you like to see?
+      placeholder: "Add a KAFKA_BROKERS env var that accepts a comma-separated list..."
     validations:
       required: true
 
   - type: textarea
     id: context
     attributes:
-      label: Additional Context
-      description: Add any other context, mockups, or references
-      placeholder: Links to similar features in other projects, screenshots, etc.
+      label: Any additional context?
+      placeholder: "This is common in production where you have separate clusters for different regions..."
     validations:
       required: false
-
-  - type: checkboxes
-    id: terms
-    attributes:
-      label: Code of Conduct
-      description: By submitting this issue, you agree to follow our Code of Conduct
-      options:
-        - label: I agree to follow this project's Code of Conduct
-          required: true
