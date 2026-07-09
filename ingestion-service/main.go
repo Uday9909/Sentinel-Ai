@@ -27,6 +27,8 @@ type LogEntry struct {
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
+const maxRequestBodySize = 1 << 20 // 1 MB
+
 var (
 	logsIngested = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -84,8 +86,18 @@ func (s *Server) handleHealthz(c *gin.Context) {
 func (s *Server) handleIngest(c *gin.Context) {
 	start := time.Now()
 
+	// Limit request body to 1 MB to prevent memory exhaustion from
+	// malicious or misconfigured clients. http.MaxBytesReader returns
+	// a *http.MaxBytesError when the limit is exceeded.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
+
 	var entry LogEntry
 	if err := c.ShouldBindJSON(&entry); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log format"})
 		return
 	}

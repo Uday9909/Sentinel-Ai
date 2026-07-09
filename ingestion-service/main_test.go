@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,6 +188,37 @@ func TestHandleIngest_KafkaTimeout(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["error"] != "kafka write timed out" {
 		t.Errorf("expected 'kafka write timed out', got %q", resp["error"])
+	}
+}
+
+func TestHandleIngest_RequestBodyTooLarge(t *testing.T) {
+	mw := &mockWriter{}
+	srv := NewServer(mw)
+
+	// Build a valid JSON payload larger than 1 MB.
+	// A 1 MB string value inside JSON makes the total body exceed the limit.
+	largeMsg := strings.Repeat("x", (1<<20)+1024) // 1 MB + 1 KB string
+	body := fmt.Sprintf(`{"service":"test-svc","level":"info","message":"%s"}`, largeMsg)
+	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d — body length: %d", rec.Code, len(body))
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "request body too large" {
+		t.Errorf("expected 'request body too large', got %q", resp["error"])
+	}
+
+	if mw.gotMsg != nil {
+		t.Error("expected no Kafka message to be written when body exceeds limit")
 	}
 }
 
