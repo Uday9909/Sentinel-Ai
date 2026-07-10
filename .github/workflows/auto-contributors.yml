@@ -1,0 +1,45 @@
+name: Auto-add contributors
+
+on:
+  pull_request_target:
+    types: [closed]
+
+jobs:
+  add-contributor:
+    if: github.event.pull_request.merged == true && github.event.pull_request.author_association != 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add contributor to CONTRIBUTORS.md
+        run: |
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+          URL="${{ github.event.pull_request.user.html_url }}"
+          TYPE="${{ github.event.pull_request.author_association }}"
+          DESC="first-time contributor"
+
+          # Skip if already listed
+          if grep -qi "\[$AUTHOR\]" CONTRIBUTORS.md; then
+            echo "✅ $AUTHOR already in CONTRIBUTORS.md"
+            exit 0
+          fi
+
+          echo "" >> CONTRIBUTORS.md
+          echo "- **$AUTHOR** ([@$AUTHOR]($URL)) — $DESC" >> CONTRIBUTORS.md
+          echo "✅ Added $AUTHOR to CONTRIBUTORS.md"
+
+      - name: Commit and push if changed
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add CONTRIBUTORS.md
+            git commit -m "chore: add ${{ github.event.pull_request.user.login }} to CONTRIBUTORS.md"
+            git push
+          fi
