@@ -1,0 +1,51 @@
+name: Welcome first-time PR authors
+
+on:
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  welcome:
+    if: github.event.pull_request.author_association == 'NONE' || github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if first PR
+        id: check_first_pr
+        run: |
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+          if grep -qi "\[$AUTHOR\]" CONTRIBUTORS.md; then
+            echo "returning=true" >> $GITHUB_OUTPUT
+          else
+            echo "returning=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post welcome comment
+        if: steps.check_first_pr.outputs.returning == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const author = context.payload.pull_request.user.login;
+            const prTitle = context.payload.pull_request.title;
+            const body = `Hey @${author}! 🌟
+
+            Welcome to **Sentinel** — and thank you so much for jumping in with \`${prTitle}\`! We genuinely appreciate you taking the time to contribute.
+
+            Here's what happens next:
+            - Someone on the team will review your changes in the next day or two
+            - If anything needs tweaking, we'll let you know — no pressure, we're happy to help
+            - Once it looks good, we'll get it merged in
+
+            In the meantime, if you have questions about your PR or the project, just reply here. We're around!
+
+            Thanks again for being part of this. 🙌`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });
