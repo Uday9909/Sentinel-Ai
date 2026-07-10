@@ -8,3 +8,5 @@
 - **professor314** ([@professor314](https://github.com/professor314)) — first-time contributor
 
 *Want to see your name here? Check out our [good first issues](GOOD_FIRST_ISSUES.md)!*
+
+- **deepmhatre13** ([@deepmhatre13](https://github.com/deepmhatre13)) — first-time contributor
