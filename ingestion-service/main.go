@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -27,7 +28,16 @@ type LogEntry struct {
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
-const maxRequestBodySize = 1 << 20 // 1 MB
+const defaultMaxBodySize = 1 << 20 // 1 MB
+
+func getMaxBodySize() int64 {
+	if s := os.Getenv("MAX_BODY_SIZE"); s != "" {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxBodySize
+}
 
 var (
 	logsIngested = prometheus.NewCounterVec(
@@ -89,7 +99,7 @@ func (s *Server) handleIngest(c *gin.Context) {
 	// Limit request body to 1 MB to prevent memory exhaustion from
 	// malicious or misconfigured clients. http.MaxBytesReader returns
 	// a *http.MaxBytesError when the limit is exceeded.
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, getMaxBodySize())
 
 	var entry LogEntry
 	if err := c.ShouldBindJSON(&entry); err != nil {
