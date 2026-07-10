@@ -197,7 +197,7 @@ func TestHandleIngest_RequestBodyTooLarge(t *testing.T) {
 
 	// Build a valid JSON payload larger than 1 MB.
 	// A 1 MB string value inside JSON makes the total body exceed the limit.
-	largeMsg := strings.Repeat("x", maxRequestBodySize+1024) // 1 MB + 1 KB string
+	largeMsg := strings.Repeat("x", defaultMaxBodySize+1024) // 1 MB + 1 KB string
 	body := fmt.Sprintf(`{"service":"test-svc","level":"info","message":"%s"}`, largeMsg)
 	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
