@@ -15,7 +15,6 @@ from processor import (
     KAFKA_RECONNECT_BACKOFF_MAX_MS,
     KAFKA_RECONNECT_BACKOFF_MS,
     KAFKA_RECONNECT_INITIAL_DELAY_SEC,
-    KAFKA_RECONNECT_MAX_DELAY_SEC,
     KAFKA_RETRY_BACKOFF_MS,
     OLLAMA_COOLDOWN_SEC,
     TRAIN_INTERVAL,
@@ -189,7 +188,24 @@ def test_build_kafka_consumer_sets_backoff_config():
             def close(self):
                 return None
 
-        with patch("processor.TemplateMiner"), patch("processor.TemplateMinerConfig"), patch("processor.Elasticsearch"), patch("processor.start_http_server"), patch("processor.start_health_server"), patch("processor.signal.signal"), patch("processor.os.path.exists", return_value=False), patch("processor.os.getenv", side_effect=lambda key, default=None: {"ES_URL": "http://localhost:9200", "KAFKA_BROKER": "localhost:9092", "LOG_LEVEL": "INFO"}.get(key, default)), patch("processor.threading.Event") as mock_event:
+        with (
+            patch("processor.TemplateMiner"),
+            patch("processor.TemplateMinerConfig"),
+            patch("processor.Elasticsearch"),
+            patch("processor.start_http_server"),
+            patch("processor.start_health_server"),
+            patch("processor.signal.signal"),
+            patch("processor.os.path.exists", return_value=False),
+            patch(
+                "processor.os.getenv",
+                side_effect=lambda key, default=None: {
+                    "ES_URL": "http://localhost:9200",
+                    "KAFKA_BROKER": "localhost:9092",
+                    "LOG_LEVEL": "INFO",
+                }.get(key, default),
+            ),
+            patch("processor.threading.Event") as mock_event,
+        ):
             mock_event.return_value.is_set.side_effect = [False, True]
             mock_consumer.return_value = EmptyConsumer()
             from processor import main
@@ -229,7 +245,28 @@ def test_main_reconnects_with_exponential_backoff_sequence():
             return True
         return False
 
-    with patch("processor.KafkaConsumer", side_effect=[Exception("connect fail"), FailingConsumer()]), patch("processor.TemplateMiner"), patch("processor.TemplateMinerConfig"), patch("processor.Elasticsearch"), patch("processor.start_http_server"), patch("processor.start_health_server"), patch("processor.signal.signal"), patch("processor.os.path.exists", return_value=False), patch("processor.os.getenv", side_effect=lambda key, default=None: {"ES_URL": "http://localhost:9200", "KAFKA_BROKER": "localhost:9092", "LOG_LEVEL": "INFO"}.get(key, default)), patch("processor.threading.Event", return_value=stop_event):
+    with (
+        patch(
+            "processor.KafkaConsumer",
+            side_effect=[Exception("connect fail"), FailingConsumer()],
+        ),
+        patch("processor.TemplateMiner"),
+        patch("processor.TemplateMinerConfig"),
+        patch("processor.Elasticsearch"),
+        patch("processor.start_http_server"),
+        patch("processor.start_health_server"),
+        patch("processor.signal.signal"),
+        patch("processor.os.path.exists", return_value=False),
+        patch(
+            "processor.os.getenv",
+            side_effect=lambda key, default=None: {
+                "ES_URL": "http://localhost:9200",
+                "KAFKA_BROKER": "localhost:9092",
+                "LOG_LEVEL": "INFO",
+            }.get(key, default),
+        ),
+        patch("processor.threading.Event", return_value=stop_event),
+    ):
         stop_event.wait = wait_fn
         from processor import main
 

@@ -229,12 +229,20 @@ def main():
                         log_data = json.loads(message.value)
                         if isinstance(log_data, str):
                             log_text = log_data
-                            log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+                            log_data = {
+                                "message": log_text,
+                                "service": "unknown",
+                                "level": "unknown",
+                            }
                         else:
                             log_text = log_data.get("message", "")
                     except json.JSONDecodeError:
                         log_text = message.value
-                        log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+                        log_data = {
+                            "message": log_text,
+                            "service": "unknown",
+                            "level": "unknown",
+                        }
 
                     # --- Template mining (Drain3) ---
                     template_result = template_miner.add_log_message(log_text)
@@ -264,7 +272,10 @@ def main():
                     ai_summary = "Normal"
                     if is_anomaly:
                         ANOMALIES_DETECTED.inc()
-                        logger.info("ANOMALY DETECTED! (Rate: %.1f/s) Consulting AI...", logs_per_sec)
+                        logger.info(
+                            "ANOMALY DETECTED! (Rate: %.1f/s) Consulting AI...",
+                            logs_per_sec,
+                        )
                         is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
                             log_text, log_data, last_ollama_failure
                         )
