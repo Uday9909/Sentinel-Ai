@@ -155,143 +155,6 @@ def run_ai_analysis(log_text, log_data, last_failure_time):
         return True, "AI Analysis Unavailable", now
 
 
-def build_kafka_consumer(kafka_broker):
-    """Build a Kafka consumer with reconnect-friendly client backoff settings."""
-    return KafkaConsumer(
-        'raw-logs',
-        bootstrap_servers=[kafka_broker],
-        value_deserializer=lambda m: m.decode('utf-8'),
-        group_id='sentinel-processor',
-        auto_offset_reset='earliest',
-        retry_backoff_ms=KAFKA_RETRY_BACKOFF_MS,
-        reconnect_backoff_ms=KAFKA_RECONNECT_BACKOFF_MS,
-        reconnect_backoff_max_ms=KAFKA_RECONNECT_BACKOFF_MAX_MS,
-    )
-
-
-def get_next_reconnect_delay(previous_delay):
-    """Return the next reconnect delay using exponential backoff with a hard cap."""
-    if previous_delay <= 0:
-        return KAFKA_RECONNECT_INITIAL_DELAY_SEC
-    return min(previous_delay * 2, KAFKA_RECONNECT_MAX_DELAY_SEC)
-
-
-def process_kafka_stream(
-    kafka_broker,
-    template_miner,
-    es,
-    log_timestamps,
-    rate_history,
-    model,
-    last_train_time,
-    last_ollama_failure,
-    stop_event,
-    wait_fn,
-):
-    """Consume Kafka logs, reconnecting with backoff if the consumer fails."""
-    reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
-
-    while not stop_event.is_set():
-        consumer = None
-        try:
-            consumer = build_kafka_consumer(kafka_broker)
-            reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
-            logger.info("Connected to Kafka broker %s", kafka_broker)
-
-            for message in consumer:
-                if stop_event.is_set():
-                    break
-
-                start_time = time.time()
-                LOGS_PROCESSED.inc()
-
-                # --- Parse ---
-                try:
-                    log_data = json.loads(message.value)
-                    if isinstance(log_data, str):
-                        log_text = log_data
-                        log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-                    else:
-                        log_text = log_data.get("message", "")
-                except json.JSONDecodeError:
-                    log_text = message.value
-                    log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-
-                # --- Template mining (Drain3) ---
-                template_result = template_miner.add_log_message(log_text)
-                cluster_id = template_result.get("cluster_id", 0)
-
-                # --- Log rate (sliding window) ---
-                current_time = time.time()
-                log_timestamps.append(current_time)
-
-                logs_per_sec = 0.0
-                if len(log_timestamps) > 1:
-                    time_span = log_timestamps[-1] - log_timestamps[0]
-                    if time_span > 0:
-                        logs_per_sec = len(log_timestamps) / time_span
-                        rate_history.append([logs_per_sec])
-
-                # --- ANOMALY DETECTION ---
-                # Each detector runs independently — no single check short-circuits the others.
-                keyword_anomaly = has_keyword_indicator(log_text)
-
-                model, last_train_time = train_if_needed(model, rate_history, last_train_time)
-                rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
-
-                is_anomaly = keyword_anomaly or rate_anomaly
-
-                # --- AI ANALYSIS (only for anomalies) ---
-                ai_summary = "Normal"
-                if is_anomaly:
-                    ANOMALIES_DETECTED.inc()
-                    logger.info("ANOMALY DETECTED! (Rate: %.1f/s) Consulting AI...", logs_per_sec)
-                    is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
-                        log_text, log_data, last_ollama_failure
-                    )
-
-                # --- Persist to Elasticsearch ---
-                document = {
-                    "message": log_text,
-                    "service": log_data.get("service", "unknown"),
-                    "level": log_data.get("level", "unknown"),
-                    "trace_id": log_data.get("trace_id", ""),
-                    "host": log_data.get("host", ""),
-                    "timestamp_log": log_data.get("timestamp", 0),
-                    "is_anomaly": is_anomaly,
-                    "ai_explanation": ai_summary,
-                    "cluster_id": cluster_id,
-                    "timestamp_processed": time.time(),
-                }
-                try:
-                    es.index(index="logs-index", document=document)
-                except Exception as e:
-                    ES_WRITE_ERRORS.inc()
-                    logger.exception("ES write failed: %s", e)
-
-                PROCESSING_TIME.observe(time.time() - start_time)
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            if stop_event.is_set():
-                break
-
-            logger.exception("Kafka consumer error: %s", e)
-            logger.info("Reconnecting to Kafka in %s seconds", reconnect_delay)
-            try:
-                if wait_fn(reconnect_delay):
-                    break
-            except KeyboardInterrupt:
-                break
-            reconnect_delay = get_next_reconnect_delay(reconnect_delay)
-        finally:
-            if consumer is not None:
-                consumer.close()
-                logger.info("Kafka consumer closed.")
-
-    return model, last_train_time, last_ollama_failure
-
-
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -327,6 +190,7 @@ def main():
     last_train_time = time.time()
     last_ollama_failure = 0.0
     stop_event = threading.Event()
+    reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
 
     # --- Graceful shutdown ---
     def handle_sigterm(signum, frame):
@@ -337,18 +201,109 @@ def main():
     signal.signal(signal.SIGTERM, handle_sigterm)
 
     try:
-        model, last_train_time, last_ollama_failure = process_kafka_stream(
-            kafka_broker=kafka_broker,
-            template_miner=template_miner,
-            es=es,
-            log_timestamps=log_timestamps,
-            rate_history=rate_history,
-            model=model,
-            last_train_time=last_train_time,
-            last_ollama_failure=last_ollama_failure,
-            stop_event=stop_event,
-            wait_fn=stop_event.wait,
-        )
+        while not stop_event.is_set():
+            consumer = None
+            try:
+                consumer = KafkaConsumer(
+                    'raw-logs',
+                    bootstrap_servers=[kafka_broker],
+                    value_deserializer=lambda m: m.decode('utf-8'),
+                    group_id='sentinel-processor',
+                    auto_offset_reset='earliest',
+                    retry_backoff_ms=KAFKA_RETRY_BACKOFF_MS,
+                    reconnect_backoff_ms=KAFKA_RECONNECT_BACKOFF_MS,
+                    reconnect_backoff_max_ms=KAFKA_RECONNECT_BACKOFF_MAX_MS,
+                )
+                reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
+                logger.info("Connected to Kafka broker %s", kafka_broker)
+
+                for message in consumer:
+                    if stop_event.is_set():
+                        break
+
+                    start_time = time.time()
+                    LOGS_PROCESSED.inc()
+
+                    # --- Parse ---
+                    try:
+                        log_data = json.loads(message.value)
+                        if isinstance(log_data, str):
+                            log_text = log_data
+                            log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+                        else:
+                            log_text = log_data.get("message", "")
+                    except json.JSONDecodeError:
+                        log_text = message.value
+                        log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+
+                    # --- Template mining (Drain3) ---
+                    template_result = template_miner.add_log_message(log_text)
+                    cluster_id = template_result.get("cluster_id", 0)
+
+                    # --- Log rate (sliding window) ---
+                    current_time = time.time()
+                    log_timestamps.append(current_time)
+
+                    logs_per_sec = 0.0
+                    if len(log_timestamps) > 1:
+                        time_span = log_timestamps[-1] - log_timestamps[0]
+                        if time_span > 0:
+                            logs_per_sec = len(log_timestamps) / time_span
+                            rate_history.append([logs_per_sec])
+
+                    # --- ANOMALY DETECTION ---
+                    # Each detector runs independently — no single check short-circuits the others.
+                    keyword_anomaly = has_keyword_indicator(log_text)
+
+                    model, last_train_time = train_if_needed(model, rate_history, last_train_time)
+                    rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
+
+                    is_anomaly = keyword_anomaly or rate_anomaly
+
+                    # --- AI ANALYSIS (only for anomalies) ---
+                    ai_summary = "Normal"
+                    if is_anomaly:
+                        ANOMALIES_DETECTED.inc()
+                        logger.info("ANOMALY DETECTED! (Rate: %.1f/s) Consulting AI...", logs_per_sec)
+                        is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
+                            log_text, log_data, last_ollama_failure
+                        )
+
+                    # --- Persist to Elasticsearch ---
+                    document = {
+                        "message": log_text,
+                        "service": log_data.get("service", "unknown"),
+                        "level": log_data.get("level", "unknown"),
+                        "trace_id": log_data.get("trace_id", ""),
+                        "host": log_data.get("host", ""),
+                        "timestamp_log": log_data.get("timestamp", 0),
+                        "is_anomaly": is_anomaly,
+                        "ai_explanation": ai_summary,
+                        "cluster_id": cluster_id,
+                        "timestamp_processed": time.time(),
+                    }
+                    try:
+                        es.index(index="logs-index", document=document)
+                    except Exception as e:
+                        ES_WRITE_ERRORS.inc()
+                        logger.exception("ES write failed: %s", e)
+
+                    PROCESSING_TIME.observe(time.time() - start_time)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                if stop_event.is_set():
+                    break
+
+                logger.exception("Kafka consumer error: %s", e)
+                logger.info("Reconnecting to Kafka in %s seconds", reconnect_delay)
+                if stop_event.wait(reconnect_delay):
+                    break
+                reconnect_delay = min(reconnect_delay * 2, KAFKA_RECONNECT_MAX_DELAY_SEC)
+            finally:
+                if consumer is not None:
+                    consumer.close()
+                    logger.info("Kafka consumer closed.")
     except KeyboardInterrupt:
         logger.info("Shutting down gracefully...")
     finally:
