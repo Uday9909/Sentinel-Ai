@@ -7,77 +7,13 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-try:
-    import ollama
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class _FallbackOllamaClient:
-        def chat(self, *args, **kwargs):
-            raise ModuleNotFoundError("No module named 'ollama'")
-
-    class _FallbackOllamaModule:
-        def Client(self, host=None):
-            return _FallbackOllamaClient()
-
-    ollama = _FallbackOllamaModule()
-
-try:
-    from drain3 import TemplateMiner
-    from drain3.template_miner_config import TemplateMinerConfig
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class TemplateMinerConfig:
-        pass
-
-    class TemplateMiner:
-        def __init__(self, config=None):
-            self.config = config
-
-        def add_log_message(self, log_text):
-            return {"cluster_id": 0}
-
-try:
-    from elasticsearch import Elasticsearch
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class Elasticsearch:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def index(self, *args, **kwargs):
-            return None
-
-try:
-    from joblib import dump, load
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    def dump(*args, **kwargs):
-        return None
-
-    def load(*args, **kwargs):
-        raise FileNotFoundError
-
-try:
-    from kafka import KafkaConsumer
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class KafkaConsumer:
-        def __init__(self, *args, **kwargs):
-            raise ModuleNotFoundError("No module named 'kafka'")
-
-try:
-    from prometheus_client import Counter, Histogram, start_http_server
-except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
-    class _NoOpMetric:
-        def inc(self, *args, **kwargs):
-            return None
-
-        def observe(self, *args, **kwargs):
-            return None
-
-    def Counter(*args, **kwargs):
-        return _NoOpMetric()
-
-    def Histogram(*args, **kwargs):
-        return _NoOpMetric()
-
-    def start_http_server(*args, **kwargs):
-        return None
+import ollama
+from drain3 import TemplateMiner
+from drain3.template_miner_config import TemplateMinerConfig
+from elasticsearch import Elasticsearch
+from joblib import dump, load
+from kafka import KafkaConsumer
+from prometheus_client import Counter, Histogram, start_http_server
 from sklearn.ensemble import IsolationForest
 
 logger = logging.getLogger(__name__)
@@ -131,7 +67,7 @@ def start_health_server(port: int = 8002) -> None:
     server = HTTPServer(("0.0.0.0", port), _HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    print(f"Health check server running on port {port}")
+    logger.info("Health check server running on port %s", port)
 
 # --- PROMETHEUS METRICS ---
 LOGS_PROCESSED = Counter('logs_processed_total', 'Total logs consumed from Kafka')
@@ -160,10 +96,10 @@ def train_if_needed(model, rate_history, last_train_time):
         new_model = IsolationForest(contamination=0.05, random_state=42)
         new_model.fit(list(rate_history))
         dump(new_model, MODEL_PATH)
-        print("Model retrained and persisted.")
+        logger.info("Model retrained and persisted.")
         return new_model, now
     except Exception as e:
-        print(f"Model training failed: {e}")
+        logger.exception("Model training failed: %s", e)
         return model, last_train_time
 
 
@@ -212,10 +148,10 @@ def run_ai_analysis(log_text, log_data, last_failure_time):
         if "Normal" in ai_content and len(ai_content) < 15:
             return False, "Normal", last_failure_time
         else:
-            print(f"\nAI ANALYSIS:\n{ai_content}\n")
+            logger.info("AI ANALYSIS:\n%s", ai_content)
             return True, ai_content, last_failure_time
     except Exception as e:
-        print(f"AI Analysis Failed: {e}")
+        logger.exception("AI Analysis Failed: %s", e)
         return True, "AI Analysis Unavailable", now
 
 
@@ -309,7 +245,7 @@ def process_kafka_stream(
                 ai_summary = "Normal"
                 if is_anomaly:
                     ANOMALIES_DETECTED.inc()
-                    print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
+                    logger.info("ANOMALY DETECTED! (Rate: %.1f/s) Consulting AI...", logs_per_sec)
                     is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
                         log_text, log_data, last_ollama_failure
                     )
@@ -331,7 +267,7 @@ def process_kafka_stream(
                     es.index(index="logs-index", document=document)
                 except Exception as e:
                     ES_WRITE_ERRORS.inc()
-                    print(f"ES write failed: {e}")
+                    logger.exception("ES write failed: %s", e)
 
                 PROCESSING_TIME.observe(time.time() - start_time)
         except KeyboardInterrupt:
@@ -370,10 +306,10 @@ def main():
     kafka_broker = os.getenv("KAFKA_BROKER", "localhost:9092")
     es = Elasticsearch([es_url])
 
-    print("AI-Powered SRE Agent is ONLINE.")
+    logger.info("AI-Powered SRE Agent is ONLINE.")
 
     start_http_server(8001)
-    print("Metrics Server running on port 8001")
+    logger.info("Metrics Server running on port 8001")
 
     start_health_server(8002)
 
@@ -384,9 +320,9 @@ def main():
     if os.path.exists(MODEL_PATH):
         try:
             model = load(MODEL_PATH)
-            print("Loaded persisted anomaly model.")
+            logger.info("Loaded persisted anomaly model.")
         except Exception as e:
-            print(f"Failed to load model: {e}")
+            logger.exception("Failed to load model: %s", e)
 
     last_train_time = time.time()
     last_ollama_failure = 0.0
@@ -394,7 +330,7 @@ def main():
 
     # --- Graceful shutdown ---
     def handle_sigterm(signum, frame):
-        print("\nShutdown requested...")
+        logger.info("Shutdown requested...")
         stop_event.set()
         raise KeyboardInterrupt()
 
@@ -414,9 +350,9 @@ def main():
             wait_fn=stop_event.wait,
         )
     except KeyboardInterrupt:
-        print("Shutting down gracefully...")
+        logger.info("Shutting down gracefully...")
     finally:
-        print("Kafka consumer loop stopped.")
+        logger.info("Kafka consumer loop stopped.")
 
 
 if __name__ == "__main__":
