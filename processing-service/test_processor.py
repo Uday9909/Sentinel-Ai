@@ -4,6 +4,7 @@ Run with:  pytest test_processor.py -v
 """
 import time
 from collections import deque
+from threading import Event
 from unittest.mock import patch
 
 import numpy as np
@@ -11,6 +12,10 @@ import pytest
 from sklearn.ensemble import IsolationForest
 
 from processor import (
+    KAFKA_RECONNECT_BACKOFF_MAX_MS,
+    KAFKA_RECONNECT_BACKOFF_MS,
+    KAFKA_RECONNECT_INITIAL_DELAY_SEC,
+    KAFKA_RETRY_BACKOFF_MS,
     OLLAMA_COOLDOWN_SEC,
     TRAIN_INTERVAL,
     check_rate_anomaly,
@@ -172,3 +177,99 @@ def test_run_ai_analysis_ollama_exception():
     assert "Unavailable" in summary
     # new_failure should be recent (updated to now)
     assert new_failure > past_failure
+
+
+def test_build_kafka_consumer_sets_backoff_config():
+    with patch("processor.KafkaConsumer") as mock_consumer:
+        class EmptyConsumer:
+            def __iter__(self):
+                return iter(())
+
+            def close(self):
+                return None
+
+        with (
+            patch("processor.TemplateMiner"),
+            patch("processor.TemplateMinerConfig"),
+            patch("processor.Elasticsearch"),
+            patch("processor.start_http_server"),
+            patch("processor.start_health_server"),
+            patch("processor.signal.signal"),
+            patch("processor.os.path.exists", return_value=False),
+            patch(
+                "processor.os.getenv",
+                side_effect=lambda key, default=None: {
+                    "ES_URL": "http://localhost:9200",
+                    "KAFKA_BROKER": "localhost:9092",
+                    "LOG_LEVEL": "INFO",
+                }.get(key, default),
+            ),
+            patch("processor.threading.Event") as mock_event,
+        ):
+            mock_event.return_value.is_set.side_effect = [False, True]
+            mock_consumer.return_value = EmptyConsumer()
+            from processor import main
+
+            main()
+
+    _, kwargs = mock_consumer.call_args
+    assert kwargs["retry_backoff_ms"] == KAFKA_RETRY_BACKOFF_MS
+    assert kwargs["reconnect_backoff_ms"] == KAFKA_RECONNECT_BACKOFF_MS
+    assert kwargs["reconnect_backoff_max_ms"] == KAFKA_RECONNECT_BACKOFF_MAX_MS
+
+
+def test_main_reconnects_with_exponential_backoff_sequence():
+    stop_event = Event()
+    waits = []
+
+    class FailingConsumer:
+        def __init__(self):
+            self._count = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self._count += 1
+            if self._count == 1:
+                raise Exception("stream interrupted")
+            raise StopIteration
+
+        def close(self):
+            return None
+
+    def wait_fn(delay):
+        waits.append(delay)
+        if len(waits) >= 2:
+            stop_event.set()
+            return True
+        return False
+
+    with (
+        patch(
+            "processor.KafkaConsumer",
+            side_effect=[Exception("connect fail"), FailingConsumer()],
+        ),
+        patch("processor.TemplateMiner"),
+        patch("processor.TemplateMinerConfig"),
+        patch("processor.Elasticsearch"),
+        patch("processor.start_http_server"),
+        patch("processor.start_health_server"),
+        patch("processor.signal.signal"),
+        patch("processor.os.path.exists", return_value=False),
+        patch(
+            "processor.os.getenv",
+            side_effect=lambda key, default=None: {
+                "ES_URL": "http://localhost:9200",
+                "KAFKA_BROKER": "localhost:9092",
+                "LOG_LEVEL": "INFO",
+            }.get(key, default),
+        ),
+        patch("processor.threading.Event", return_value=stop_event),
+    ):
+        stop_event.wait = wait_fn
+        from processor import main
+
+        main()
+
+    assert waits == [KAFKA_RECONNECT_INITIAL_DELAY_SEC, KAFKA_RECONNECT_INITIAL_DELAY_SEC]
