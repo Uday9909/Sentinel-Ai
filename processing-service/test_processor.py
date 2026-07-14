@@ -4,6 +4,7 @@ Run with:  pytest test_processor.py -v
 """
 import time
 from collections import deque
+from threading import Event
 from unittest.mock import patch
 
 import numpy as np
@@ -11,10 +12,18 @@ import pytest
 from sklearn.ensemble import IsolationForest
 
 from processor import (
+    KAFKA_RECONNECT_BACKOFF_MAX_MS,
+    KAFKA_RECONNECT_BACKOFF_MS,
+    KAFKA_RECONNECT_INITIAL_DELAY_SEC,
+    KAFKA_RECONNECT_MAX_DELAY_SEC,
+    KAFKA_RETRY_BACKOFF_MS,
     OLLAMA_COOLDOWN_SEC,
     TRAIN_INTERVAL,
+    build_kafka_consumer,
     check_rate_anomaly,
+    get_next_reconnect_delay,
     has_keyword_indicator,
+    process_kafka_stream,
     run_ai_analysis,
     train_if_needed,
 )
@@ -172,3 +181,130 @@ def test_run_ai_analysis_ollama_exception():
     assert "Unavailable" in summary
     # new_failure should be recent (updated to now)
     assert new_failure > past_failure
+
+
+# ---------------------------------------------------------------------------
+# Kafka reconnect/backoff behavior
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "previous,expected",
+    [
+        (0, KAFKA_RECONNECT_INITIAL_DELAY_SEC),
+        (-1, KAFKA_RECONNECT_INITIAL_DELAY_SEC),
+        (1, 2),
+        (2, 4),
+        (30, 60),
+        (60, KAFKA_RECONNECT_MAX_DELAY_SEC),
+        (120, KAFKA_RECONNECT_MAX_DELAY_SEC),
+    ],
+)
+def test_get_next_reconnect_delay(previous, expected):
+    assert get_next_reconnect_delay(previous) == expected
+
+
+def test_build_kafka_consumer_sets_backoff_config():
+    with patch("processor.KafkaConsumer") as mock_consumer:
+        build_kafka_consumer("localhost:9092")
+
+    _, kwargs = mock_consumer.call_args
+    assert kwargs["retry_backoff_ms"] == KAFKA_RETRY_BACKOFF_MS
+    assert kwargs["reconnect_backoff_ms"] == KAFKA_RECONNECT_BACKOFF_MS
+    assert kwargs["reconnect_backoff_max_ms"] == KAFKA_RECONNECT_BACKOFF_MAX_MS
+
+
+def test_process_kafka_stream_stops_during_reconnect_wait():
+    stop_event = Event()
+    waits = []
+
+    def wait_fn(delay):
+        waits.append(delay)
+        stop_event.set()
+        return True
+
+    with patch("processor.build_kafka_consumer", side_effect=Exception("broker unavailable")):
+        model, last_train_time, last_ollama_failure = process_kafka_stream(
+            kafka_broker="localhost:9092",
+            template_miner=None,
+            es=None,
+            log_timestamps=deque(maxlen=100),
+            rate_history=deque(maxlen=50),
+            model=None,
+            last_train_time=123.0,
+            last_ollama_failure=456.0,
+            stop_event=stop_event,
+            wait_fn=wait_fn,
+        )
+
+    assert waits == [KAFKA_RECONNECT_INITIAL_DELAY_SEC]
+    assert model is None
+    assert last_train_time == 123.0
+    assert last_ollama_failure == 456.0
+
+
+def test_process_kafka_stream_uses_exponential_backoff_sequence():
+    stop_event = Event()
+    waits = []
+
+    def wait_fn(delay):
+        waits.append(delay)
+        if len(waits) >= 3:
+            stop_event.set()
+            return True
+        return False
+
+    with patch("processor.build_kafka_consumer", side_effect=Exception("broker unavailable")):
+        process_kafka_stream(
+            kafka_broker="localhost:9092",
+            template_miner=None,
+            es=None,
+            log_timestamps=deque(maxlen=100),
+            rate_history=deque(maxlen=50),
+            model=None,
+            last_train_time=0.0,
+            last_ollama_failure=0.0,
+            stop_event=stop_event,
+            wait_fn=wait_fn,
+        )
+
+    assert waits == [1, 2, 4]
+
+
+def test_process_kafka_stream_resets_backoff_after_successful_connect():
+    stop_event = Event()
+    waits = []
+
+    class FailingConsumer:
+        def __iter__(self):
+            raise Exception("stream interrupted")
+
+        def close(self):
+            return None
+
+    def wait_fn(delay):
+        waits.append(delay)
+        if len(waits) >= 2:
+            stop_event.set()
+            return True
+        return False
+
+    with patch(
+        "processor.build_kafka_consumer",
+        side_effect=[Exception("connect fail"), FailingConsumer()],
+    ):
+        process_kafka_stream(
+            kafka_broker="localhost:9092",
+            template_miner=None,
+            es=None,
+            log_timestamps=deque(maxlen=100),
+            rate_history=deque(maxlen=50),
+            model=None,
+            last_train_time=0.0,
+            last_ollama_failure=0.0,
+            stop_event=stop_event,
+            wait_fn=wait_fn,
+        )
+
+    # First wait after initial connect failure is 1s; second wait confirms reset
+    # back to 1s after a successful reconnect.
+    assert waits == [1, 1]

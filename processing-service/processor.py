@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import signal
 import threading
@@ -6,14 +7,80 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import ollama
-from drain3 import TemplateMiner
-from drain3.template_miner_config import TemplateMinerConfig
-from elasticsearch import Elasticsearch
-from joblib import dump, load
-from kafka import KafkaConsumer
-from prometheus_client import Counter, Histogram, start_http_server
+try:
+    import ollama
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    class _FallbackOllamaClient:
+        def chat(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'ollama'")
+
+    class _FallbackOllamaModule:
+        def Client(self, host=None):
+            return _FallbackOllamaClient()
+
+    ollama = _FallbackOllamaModule()
+
+try:
+    from drain3 import TemplateMiner
+    from drain3.template_miner_config import TemplateMinerConfig
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    class TemplateMinerConfig:
+        pass
+
+    class TemplateMiner:
+        def __init__(self, config=None):
+            self.config = config
+
+        def add_log_message(self, log_text):
+            return {"cluster_id": 0}
+
+try:
+    from elasticsearch import Elasticsearch
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    class Elasticsearch:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def index(self, *args, **kwargs):
+            return None
+
+try:
+    from joblib import dump, load
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    def dump(*args, **kwargs):
+        return None
+
+    def load(*args, **kwargs):
+        raise FileNotFoundError
+
+try:
+    from kafka import KafkaConsumer
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    class KafkaConsumer:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'kafka'")
+
+try:
+    from prometheus_client import Counter, Histogram, start_http_server
+except ImportError:  # pragma: no cover - exercised when the optional dependency is absent
+    class _NoOpMetric:
+        def inc(self, *args, **kwargs):
+            return None
+
+        def observe(self, *args, **kwargs):
+            return None
+
+    def Counter(*args, **kwargs):
+        return _NoOpMetric()
+
+    def Histogram(*args, **kwargs):
+        return _NoOpMetric()
+
+    def start_http_server(*args, **kwargs):
+        return None
 from sklearn.ensemble import IsolationForest
+
+logger = logging.getLogger(__name__)
 
 # --- CONFIG ---
 _model_dir = os.getenv("MODEL_DIR", "")
@@ -26,6 +93,11 @@ else:
 TRAIN_INTERVAL = 60          # seconds between model retrains
 ANOMALY_RATE_FLOOR = 20.0    # minimum logs/sec to consider rate-based anomaly
 OLLAMA_COOLDOWN_SEC = 30     # skip LLM if it failed within this many seconds
+KAFKA_RECONNECT_INITIAL_DELAY_SEC = 1
+KAFKA_RECONNECT_MAX_DELAY_SEC = 60
+KAFKA_RETRY_BACKOFF_MS = 1000
+KAFKA_RECONNECT_BACKOFF_MS = 1000
+KAFKA_RECONNECT_BACKOFF_MAX_MS = 60000
 
 # Ollama LLM client — host is configurable for K8s / Docker networking
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -147,22 +219,156 @@ def run_ai_analysis(log_text, log_data, last_failure_time):
         return True, "AI Analysis Unavailable", now
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
-def main():
-    template_miner = TemplateMiner(config=TemplateMinerConfig())
-    es_url = os.getenv("ES_URL", "http://localhost:9200")
-    kafka_broker = os.getenv("KAFKA_BROKER", "localhost:9092")
-    es = Elasticsearch([es_url])
-    consumer = KafkaConsumer(
+def build_kafka_consumer(kafka_broker):
+    """Build a Kafka consumer with reconnect-friendly client backoff settings."""
+    return KafkaConsumer(
         'raw-logs',
         bootstrap_servers=[kafka_broker],
         value_deserializer=lambda m: m.decode('utf-8'),
         group_id='sentinel-processor',
         auto_offset_reset='earliest',
+        retry_backoff_ms=KAFKA_RETRY_BACKOFF_MS,
+        reconnect_backoff_ms=KAFKA_RECONNECT_BACKOFF_MS,
+        reconnect_backoff_max_ms=KAFKA_RECONNECT_BACKOFF_MAX_MS,
     )
+
+
+def get_next_reconnect_delay(previous_delay):
+    """Return the next reconnect delay using exponential backoff with a hard cap."""
+    if previous_delay <= 0:
+        return KAFKA_RECONNECT_INITIAL_DELAY_SEC
+    return min(previous_delay * 2, KAFKA_RECONNECT_MAX_DELAY_SEC)
+
+
+def process_kafka_stream(
+    kafka_broker,
+    template_miner,
+    es,
+    log_timestamps,
+    rate_history,
+    model,
+    last_train_time,
+    last_ollama_failure,
+    stop_event,
+    wait_fn,
+):
+    """Consume Kafka logs, reconnecting with backoff if the consumer fails."""
+    reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
+
+    while not stop_event.is_set():
+        consumer = None
+        try:
+            consumer = build_kafka_consumer(kafka_broker)
+            reconnect_delay = KAFKA_RECONNECT_INITIAL_DELAY_SEC
+            logger.info("Connected to Kafka broker %s", kafka_broker)
+
+            for message in consumer:
+                if stop_event.is_set():
+                    break
+
+                start_time = time.time()
+                LOGS_PROCESSED.inc()
+
+                # --- Parse ---
+                try:
+                    log_data = json.loads(message.value)
+                    if isinstance(log_data, str):
+                        log_text = log_data
+                        log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+                    else:
+                        log_text = log_data.get("message", "")
+                except json.JSONDecodeError:
+                    log_text = message.value
+                    log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
+
+                # --- Template mining (Drain3) ---
+                template_result = template_miner.add_log_message(log_text)
+                cluster_id = template_result.get("cluster_id", 0)
+
+                # --- Log rate (sliding window) ---
+                current_time = time.time()
+                log_timestamps.append(current_time)
+
+                logs_per_sec = 0.0
+                if len(log_timestamps) > 1:
+                    time_span = log_timestamps[-1] - log_timestamps[0]
+                    if time_span > 0:
+                        logs_per_sec = len(log_timestamps) / time_span
+                        rate_history.append([logs_per_sec])
+
+                # --- ANOMALY DETECTION ---
+                # Each detector runs independently — no single check short-circuits the others.
+                keyword_anomaly = has_keyword_indicator(log_text)
+
+                model, last_train_time = train_if_needed(model, rate_history, last_train_time)
+                rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
+
+                is_anomaly = keyword_anomaly or rate_anomaly
+
+                # --- AI ANALYSIS (only for anomalies) ---
+                ai_summary = "Normal"
+                if is_anomaly:
+                    ANOMALIES_DETECTED.inc()
+                    print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
+                    is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
+                        log_text, log_data, last_ollama_failure
+                    )
+
+                # --- Persist to Elasticsearch ---
+                document = {
+                    "message": log_text,
+                    "service": log_data.get("service", "unknown"),
+                    "level": log_data.get("level", "unknown"),
+                    "trace_id": log_data.get("trace_id", ""),
+                    "host": log_data.get("host", ""),
+                    "timestamp_log": log_data.get("timestamp", 0),
+                    "is_anomaly": is_anomaly,
+                    "ai_explanation": ai_summary,
+                    "cluster_id": cluster_id,
+                    "timestamp_processed": time.time(),
+                }
+                try:
+                    es.index(index="logs-index", document=document)
+                except Exception as e:
+                    ES_WRITE_ERRORS.inc()
+                    print(f"ES write failed: {e}")
+
+                PROCESSING_TIME.observe(time.time() - start_time)
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            if stop_event.is_set():
+                break
+
+            logger.exception("Kafka consumer error: %s", e)
+            logger.info("Reconnecting to Kafka in %s seconds", reconnect_delay)
+            try:
+                if wait_fn(reconnect_delay):
+                    break
+            except KeyboardInterrupt:
+                break
+            reconnect_delay = get_next_reconnect_delay(reconnect_delay)
+        finally:
+            if consumer is not None:
+                consumer.close()
+                logger.info("Kafka consumer closed.")
+
+    return model, last_train_time, last_ollama_failure
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+def main():
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    template_miner = TemplateMiner(config=TemplateMinerConfig())
+    es_url = os.getenv("ES_URL", "http://localhost:9200")
+    kafka_broker = os.getenv("KAFKA_BROKER", "localhost:9092")
+    es = Elasticsearch([es_url])
 
     print("AI-Powered SRE Agent is ONLINE.")
 
@@ -184,89 +390,33 @@ def main():
 
     last_train_time = time.time()
     last_ollama_failure = 0.0
+    stop_event = threading.Event()
 
     # --- Graceful shutdown ---
     def handle_sigterm(signum, frame):
         print("\nShutdown requested...")
+        stop_event.set()
         raise KeyboardInterrupt()
 
     signal.signal(signal.SIGTERM, handle_sigterm)
 
     try:
-        for message in consumer:
-            start_time = time.time()
-            LOGS_PROCESSED.inc()
-
-            # --- Parse ---
-            try:
-                log_data = json.loads(message.value)
-                if isinstance(log_data, str):
-                    log_text = log_data
-                    log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-                else:
-                    log_text = log_data.get("message", "")
-            except json.JSONDecodeError:
-                log_text = message.value
-                log_data = {"message": log_text, "service": "unknown", "level": "unknown"}
-
-            # --- Template mining (Drain3) ---
-            template_result = template_miner.add_log_message(log_text)
-            cluster_id = template_result.get("cluster_id", 0)
-
-            # --- Log rate (sliding window) ---
-            current_time = time.time()
-            log_timestamps.append(current_time)
-
-            logs_per_sec = 0.0
-            if len(log_timestamps) > 1:
-                time_span = log_timestamps[-1] - log_timestamps[0]
-                if time_span > 0:
-                    logs_per_sec = len(log_timestamps) / time_span
-                    rate_history.append([logs_per_sec])
-
-            # --- ANOMALY DETECTION ---
-            # Each detector runs independently — no single check short-circuits the others.
-            keyword_anomaly = has_keyword_indicator(log_text)
-
-            model, last_train_time = train_if_needed(model, rate_history, last_train_time)
-            rate_anomaly = check_rate_anomaly(logs_per_sec, rate_history, model)
-
-            is_anomaly = keyword_anomaly or rate_anomaly
-
-            # --- AI ANALYSIS (only for anomalies) ---
-            ai_summary = "Normal"
-            if is_anomaly:
-                ANOMALIES_DETECTED.inc()
-                print(f"ANOMALY DETECTED! (Rate: {logs_per_sec:.1f}/s) Consulting AI...")
-                is_anomaly, ai_summary, last_ollama_failure = run_ai_analysis(
-                    log_text, log_data, last_ollama_failure
-                )
-
-            # --- Persist to Elasticsearch ---
-            document = {
-                "message": log_text,
-                "service": log_data.get("service", "unknown"),
-                "level": log_data.get("level", "unknown"),
-                "trace_id": log_data.get("trace_id", ""),
-                "host": log_data.get("host", ""),
-                "timestamp_log": log_data.get("timestamp", 0),
-                "is_anomaly": is_anomaly,
-                "ai_explanation": ai_summary,
-                "cluster_id": cluster_id,
-                "timestamp_processed": time.time(),
-            }
-            try:
-                es.index(index="logs-index", document=document)
-            except Exception as e:
-                ES_WRITE_ERRORS.inc()
-                print(f"ES write failed: {e}")
-
-            PROCESSING_TIME.observe(time.time() - start_time)
+        model, last_train_time, last_ollama_failure = process_kafka_stream(
+            kafka_broker=kafka_broker,
+            template_miner=template_miner,
+            es=es,
+            log_timestamps=log_timestamps,
+            rate_history=rate_history,
+            model=model,
+            last_train_time=last_train_time,
+            last_ollama_failure=last_ollama_failure,
+            stop_event=stop_event,
+            wait_fn=stop_event.wait,
+        )
     except KeyboardInterrupt:
         print("Shutting down gracefully...")
     finally:
-        consumer.close()
-        print("Kafka consumer closed.")
+        print("Kafka consumer loop stopped.")
 
 
 if __name__ == "__main__":
