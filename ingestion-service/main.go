@@ -94,8 +94,7 @@ func (w *kafkaLogWriter) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_ = conn.Close()
-	return nil
+	return conn.Close()
 }
 
 type Server struct {

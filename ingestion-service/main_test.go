@@ -301,6 +301,9 @@ func TestHealthz_NilWriter(t *testing.T) {
 	if resp["status"] != "unhealthy" {
 		t.Errorf("expected status 'unhealthy', got %q", resp["status"])
 	}
+	if resp["error"] != "log writer not initialized" {
+		t.Errorf("expected error 'log writer not initialized', got %q", resp["error"])
+	}
 }
 
 func TestTimestampAutoFill(t *testing.T) {
