@@ -130,9 +130,10 @@ func (s *Server) handleHealthz(c *gin.Context) {
 	defer cancel()
 
 	if err := s.writer.Ping(ctx); err != nil {
+		log.Printf("kafka health check failed: %v", err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"status": "unhealthy",
-			"error":  err.Error(),
+			"error":  "kafka unavailable",
 		})
 		return
 	}

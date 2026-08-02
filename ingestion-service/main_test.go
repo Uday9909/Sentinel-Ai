@@ -251,7 +251,9 @@ func TestHealthz_Healthy(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status 'ok', got %q", resp["status"])
 	}
@@ -277,8 +279,8 @@ func TestHealthz_Unhealthy(t *testing.T) {
 	if resp["status"] != "unhealthy" {
 		t.Errorf("expected status 'unhealthy', got %q", resp["status"])
 	}
-	if resp["error"] != "kafka broker connection refused" {
-		t.Errorf("expected error 'kafka broker connection refused', got %q", resp["error"])
+	if resp["error"] != "kafka unavailable" {
+		t.Errorf("expected error 'kafka unavailable', got %q", resp["error"])
 	}
 }
 
