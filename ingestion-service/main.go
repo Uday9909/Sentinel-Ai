@@ -29,6 +29,7 @@ type LogEntry struct {
 }
 
 const defaultMaxBodySize = 1 << 20 // 1 MB
+const kafkaHealthCheckTimeout = 3 * time.Second
 
 func getMaxBodySize() int64 {
 	if s := os.Getenv("MAX_BODY_SIZE"); s != "" {
@@ -126,7 +127,7 @@ func (s *Server) handleHealthz(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), kafkaHealthCheckTimeout)
 	defer cancel()
 
 	if err := s.writer.Ping(ctx); err != nil {

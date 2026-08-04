@@ -42,17 +42,7 @@ func (m *mockWriter) WriteMessages(ctx context.Context, msgs ...kafka.Message) e
 }
 
 func (m *mockWriter) Ping(ctx context.Context) error {
-	if m.pingErr != nil {
-		if errors.Is(m.pingErr, context.DeadlineExceeded) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-		}
-		return m.pingErr
-	}
-	return nil
+	return m.pingErr
 }
 
 func (m *mockWriter) Close() error {
