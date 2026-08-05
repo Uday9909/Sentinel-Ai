@@ -12,3 +12,5 @@
 - **deepmhatre13** ([@deepmhatre13](https://github.com/deepmhatre13)) — first-time contributor
 
 - **sonua11y** ([@sonua11y](https://github.com/sonua11y)) — first-time contributor
+
+- **hardikkaurani** ([@hardikkaurani](https://github.com/hardikkaurani)) — first-time contributor
