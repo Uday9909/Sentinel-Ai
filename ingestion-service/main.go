@@ -29,6 +29,7 @@ type LogEntry struct {
 }
 
 const defaultMaxBodySize = 1 << 20 // 1 MB
+const kafkaHealthCheckTimeout = 3 * time.Second
 
 func getMaxBodySize() int64 {
 	if s := os.Getenv("MAX_BODY_SIZE"); s != "" {
@@ -63,10 +64,38 @@ func init() {
 	prometheus.MustRegister(ingestionLatency)
 }
 
-// logWriter is satisfied by *kafka.Writer and allows mock injection in tests.
+// logWriter is satisfied by kafkaLogWriter (or mockWriter in tests) and allows mock injection in tests.
 type logWriter interface {
 	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Ping(ctx context.Context) error
 	Close() error
+}
+
+type kafkaLogWriter struct {
+	*kafka.Writer
+	broker string
+}
+
+func newKafkaLogWriter(broker string) *kafkaLogWriter {
+	return &kafkaLogWriter{
+		Writer: &kafka.Writer{
+			Addr:     kafka.TCP(broker),
+			Topic:    "raw-logs",
+			Balancer: &kafka.Hash{},
+		},
+		broker: broker,
+	}
+}
+
+func (w *kafkaLogWriter) Ping(ctx context.Context) error {
+	if w == nil || w.broker == "" {
+		return errors.New("kafka broker not configured")
+	}
+	conn, err := kafka.DialContext(ctx, "tcp", w.broker)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 type Server struct {
@@ -90,6 +119,26 @@ func (s *Server) setupRouter() *gin.Engine {
 }
 
 func (s *Server) handleHealthz(c *gin.Context) {
+	if s.writer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "unhealthy",
+			"error":  "log writer not initialized",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), kafkaHealthCheckTimeout)
+	defer cancel()
+
+	if err := s.writer.Ping(ctx); err != nil {
+		log.Printf("kafka health check failed: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "unhealthy",
+			"error":  "kafka unavailable",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -178,11 +227,7 @@ func main() {
 		kafkaBroker = "localhost:9092"
 	}
 
-	writer := &kafka.Writer{
-		Addr:     kafka.TCP(kafkaBroker),
-		Topic:    "raw-logs",
-		Balancer: &kafka.Hash{},
-	}
+	writer := newKafkaLogWriter(kafkaBroker)
 
 	srv := NewServer(writer)
 

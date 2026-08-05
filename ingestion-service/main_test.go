@@ -17,6 +17,7 @@ import (
 // mockWriter implements logWriter for testing without a real Kafka broker.
 type mockWriter struct {
 	writeErr error
+	pingErr  error
 	closeErr error
 	gotMsg   *kafka.Message
 }
@@ -38,6 +39,10 @@ func (m *mockWriter) WriteMessages(ctx context.Context, msgs ...kafka.Message) e
 		m.gotMsg = &msgs[0]
 	}
 	return nil
+}
+
+func (m *mockWriter) Ping(ctx context.Context) error {
+	return m.pingErr
 }
 
 func (m *mockWriter) Close() error {
@@ -222,7 +227,7 @@ func TestHandleIngest_RequestBodyTooLarge(t *testing.T) {
 	}
 }
 
-func TestHealthz(t *testing.T) {
+func TestHealthz_Healthy(t *testing.T) {
 	mw := &mockWriter{}
 	srv := NewServer(mw)
 
@@ -236,9 +241,60 @@ func TestHealthz(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status 'ok', got %q", resp["status"])
+	}
+}
+
+func TestHealthz_Unhealthy(t *testing.T) {
+	mw := &mockWriter{pingErr: errors.New("kafka broker connection refused")}
+	srv := NewServer(mw)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "unhealthy" {
+		t.Errorf("expected status 'unhealthy', got %q", resp["status"])
+	}
+	if resp["error"] != "kafka unavailable" {
+		t.Errorf("expected error 'kafka unavailable', got %q", resp["error"])
+	}
+}
+
+func TestHealthz_NilWriter(t *testing.T) {
+	srv := NewServer(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["status"] != "unhealthy" {
+		t.Errorf("expected status 'unhealthy', got %q", resp["status"])
+	}
+	if resp["error"] != "log writer not initialized" {
+		t.Errorf("expected error 'log writer not initialized', got %q", resp["error"])
 	}
 }
 
