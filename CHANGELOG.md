@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exponential backoff for dashboard polling on connection errors (#8)
 - Initial open-source release
 - Real-time log ingestion via Go (Gin) HTTP API on port 8080
 - Kafka-based event streaming with service-level partitioning
