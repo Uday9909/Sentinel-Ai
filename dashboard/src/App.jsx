@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Satellite, Activity, Shield, Clock, Search, WifiOff } from 'lucide-react';
 import Layout from './components/Layout';
@@ -8,6 +8,14 @@ import DetailPanel from './components/DetailPanel';
 
 const INITIAL_POLL_INTERVAL = 2000;
 const MAX_POLL_INTERVAL = 30000;
+
+const computeBackoffDelay = (retryCount) => {
+  if (retryCount <= 0) return INITIAL_POLL_INTERVAL;
+  return Math.min(
+    INITIAL_POLL_INTERVAL * Math.pow(2, retryCount),
+    MAX_POLL_INTERVAL
+  );
+};
 
 function App() {
   const [logs, setLogs] = useState([]);
@@ -18,17 +26,20 @@ function App() {
 
   const retryCountRef = useRef(0);
   const timerRef = useRef(null);
+  const fetchLogsRef = useRef(null);
 
   const scheduleNextFetch = (delay) => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
     timerRef.current = setTimeout(() => {
-      fetchLogs();
+      if (fetchLogsRef.current) {
+        fetchLogsRef.current();
+      }
     }, delay);
   };
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const response = await axios.get('/api/logs', { params: { size: 50 } });
       const hits = response.data;
@@ -54,23 +65,23 @@ function App() {
       setRetryCount(currentRetry);
       setIsReconnecting(true);
 
-      const nextDelay = Math.min(
-        INITIAL_POLL_INTERVAL * Math.pow(2, currentRetry),
-        MAX_POLL_INTERVAL
-      );
+      const nextDelay = computeBackoffDelay(currentRetry);
       scheduleNextFetch(nextDelay);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchLogs();
+    fetchLogsRef.current = fetchLogs;
+  }, [fetchLogs]);
+
+  useEffect(() => {
+    fetchLogs(); // eslint-disable-line react-hooks/set-state-in-effect
     return () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchLogs]);
 
   // --- Sidebar Content ---
   const SidebarContent = (
@@ -106,7 +117,7 @@ function App() {
                 <WifiOff size={10} /> Reconnecting...
               </span>
               <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--color-warning)' }} data-testid="reconnecting-status">
-                Retry in {Math.min(2 * Math.pow(2, retryCount), 30)}s
+                Retry in {Math.round(computeBackoffDelay(retryCount) / 1000)}s
               </span>
             </div>
           )}
