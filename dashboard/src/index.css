@@ -10,17 +10,17 @@
   --color-white: #ffffff;
 
   /* --- Semantic Colors --- */
-  --color-danger: #ef4444;    /* Critical/Fatal */
+  --color-danger: #ef4444; /* Critical/Fatal */
   --color-danger-bg: #450a0a;
-  --color-warning: #f97316;   /* Error/Warning */
+  --color-warning: #f97316; /* Error/Warning */
   --color-warning-bg: #431407;
-  --color-success: #10b981;   /* Info/Success */
+  --color-success: #10b981; /* Info/Success */
   --color-success-bg: #064e3b;
-  --color-info: #3b82f6;      /* General Info */
+  --color-info: #3b82f6; /* General Info */
   --color-info-bg: #172554;
-  
-  --color-accent: #6366f1;    /* Primary Actions */
-  --color-anomaly: #f43f5e;   /* Anomaly Pulse */
+
+  --color-accent: #6366f1; /* Primary Actions */
+  --color-anomaly: #f43f5e; /* Anomaly Pulse */
 
   /* --- Spacing --- */
   --space-xs: 4px;
@@ -73,21 +73,43 @@ body {
 }
 
 /* Utilities */
-.text-danger { color: var(--color-danger); }
-.text-warning { color: var(--color-warning); }
-.text-success { color: var(--color-success); }
-.text-info { color: var(--color-info); }
-.text-muted { color: var(--color-slate-400); }
+.text-danger {
+  color: var(--color-danger);
+}
+.text-warning {
+  color: var(--color-warning);
+}
+.text-success {
+  color: var(--color-success);
+}
+.text-info {
+  color: var(--color-info);
+}
+.text-muted {
+  color: var(--color-slate-400);
+}
 
-.bg-danger { background-color: var(--color-danger-bg); }
-.bg-warning { background-color: var(--color-warning-bg); }
-.bg-success { background-color: var(--color-success-bg); }
+.bg-danger {
+  background-color: var(--color-danger-bg);
+}
+.bg-warning {
+  background-color: var(--color-warning-bg);
+}
+.bg-success {
+  background-color: var(--color-success-bg);
+}
 
 /* Animation */
 @keyframes pulse-red {
-  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-  70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
 }
 
 .animate-pulse-red {
@@ -99,6 +121,12 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
