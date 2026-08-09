@@ -273,3 +273,42 @@ def test_main_reconnects_with_exponential_backoff_sequence():
         main()
 
     assert waits == [KAFKA_RECONNECT_INITIAL_DELAY_SEC, KAFKA_RECONNECT_INITIAL_DELAY_SEC]
+
+
+def test_main_exponential_backoff_sequence_and_cap():
+    stop_event = Event()
+    waits = []
+
+    def wait_fn(delay):
+        waits.append(delay)
+        if len(waits) >= 8:
+            stop_event.set()
+            return True
+        return False
+
+    with (
+        patch("processor.KafkaConsumer", side_effect=Exception("connection fail")),
+        patch("processor.TemplateMiner"),
+        patch("processor.TemplateMinerConfig"),
+        patch("processor.Elasticsearch"),
+        patch("processor.start_http_server"),
+        patch("processor.start_health_server"),
+        patch("processor.signal.signal"),
+        patch("processor.os.path.exists", return_value=False),
+        patch(
+            "processor.os.getenv",
+            side_effect=lambda key, default=None: {
+                "ES_URL": "http://localhost:9200",
+                "KAFKA_BROKER": "localhost:9092",
+                "LOG_LEVEL": "INFO",
+                "LOG_DIR": "",
+            }.get(key, default),
+        ),
+        patch("processor.threading.Event", return_value=stop_event),
+    ):
+        stop_event.wait = wait_fn
+        from processor import main
+
+        main()
+
+    assert waits == [1, 2, 4, 8, 16, 32, 60, 60]
