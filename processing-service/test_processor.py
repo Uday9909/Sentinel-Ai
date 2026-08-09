@@ -301,7 +301,6 @@ def test_main_exponential_backoff_sequence_and_cap():
                 "ES_URL": "http://localhost:9200",
                 "KAFKA_BROKER": "localhost:9092",
                 "LOG_LEVEL": "INFO",
-                "LOG_DIR": "",
             }.get(key, default),
         ),
         patch("processor.threading.Event", return_value=stop_event),
