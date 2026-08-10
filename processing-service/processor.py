@@ -35,9 +35,14 @@ KAFKA_RETRY_BACKOFF_MS = 1000
 KAFKA_RECONNECT_BACKOFF_MS = 1000
 KAFKA_RECONNECT_BACKOFF_MAX_MS = 60000
 
-# Ollama LLM client — host is configurable for K8s / Docker networking
+# Ollama LLM client — host, model, and request timeout are all configurable
+# for K8s / Docker networking and for swapping models without a code change.
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-_ollama_client = ollama.Client(host=OLLAMA_HOST)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+# Bounds how long a single Ollama request may block, so a hung Ollama
+# instance can't stall anomaly processing indefinitely.
+OLLAMA_REQUEST_TIMEOUT = float(os.getenv("OLLAMA_REQUEST_TIMEOUT", "30"))
+_ollama_client = ollama.Client(host=OLLAMA_HOST, timeout=OLLAMA_REQUEST_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +128,7 @@ def run_ai_analysis(log_text, log_data, last_failure_time):
         return True, "AI Analysis Unavailable (Ollama cooldown)", last_failure_time
 
     try:
-        response = _ollama_client.chat(model='llama3.2:1b', messages=[
+        response = _ollama_client.chat(model=OLLAMA_MODEL, messages=[
             {
                 'role': 'system',
                 'content': (
