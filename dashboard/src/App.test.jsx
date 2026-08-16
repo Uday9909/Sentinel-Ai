@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import axios from 'axios'
 import App from './App'
@@ -129,5 +129,49 @@ describe('App Exponential Backoff Polling', () => {
       vi.advanceTimersByTime(2000)
     })
     expect(axios.get).toHaveBeenCalledTimes(4)
+  })
+
+  describe('Theme Toggle', () => {
+    beforeEach(() => {
+      localStorage.clear()
+      document.documentElement.removeAttribute('data-theme')
+    })
+
+    it('defaults to dark theme and toggles to light theme on button click', async () => {
+      axios.get.mockResolvedValue({ data: [] })
+
+      await act(async () => {
+        render(<App />)
+      })
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+      expect(localStorage.getItem('theme')).toBe('dark')
+
+      const toggleBtn = screen.getByTestId('theme-toggle')
+      await act(async () => {
+        fireEvent.click(toggleBtn)
+      })
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+      expect(localStorage.getItem('theme')).toBe('light')
+
+      await act(async () => {
+        fireEvent.click(toggleBtn)
+      })
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+      expect(localStorage.getItem('theme')).toBe('dark')
+    })
+
+    it('restores theme preference from localStorage on mount', async () => {
+      localStorage.setItem('theme', 'light')
+      axios.get.mockResolvedValue({ data: [] })
+
+      await act(async () => {
+        render(<App />)
+      })
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+    })
   })
 })

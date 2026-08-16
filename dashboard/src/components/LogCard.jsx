@@ -131,7 +131,7 @@ const LogCard = ({ log, isSelected, onClick }) => {
             position: 'absolute',
             right: '16px',
             top: '36px',
-            color: 'var(--color-white)',
+            color: '#ffffff',
             backgroundColor: 'var(--color-anomaly)',
             fontSize: '9px',
             fontWeight: 'bold',
