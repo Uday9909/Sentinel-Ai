@@ -25,12 +25,11 @@ jobs:
           DESC="first-time contributor"
 
           # Skip if already listed
-          if grep -qi "\[$AUTHOR\]" CONTRIBUTORS.md; then
+          if grep -qi "\[@$AUTHOR\]" CONTRIBUTORS.md; then
             echo "✅ $AUTHOR already in CONTRIBUTORS.md"
             exit 0
           fi
 
-          echo "" >> CONTRIBUTORS.md
           echo "- **$AUTHOR** ([@$AUTHOR]($URL)) — $DESC" >> CONTRIBUTORS.md
           echo "✅ Added $AUTHOR to CONTRIBUTORS.md"
 
