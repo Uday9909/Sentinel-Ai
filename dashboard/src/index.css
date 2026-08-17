@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-theme='dark'] {
   /* --- Color Palette: Slate (Backgrounds & Borders) --- */
   --color-slate-950: #020617; /* App Background */
   --color-slate-900: #0f172a; /* Panel Backgrounds */
@@ -8,6 +9,8 @@
   --color-slate-400: #94a3b8; /* Secondary Text */
   --color-slate-200: #e2e8f0; /* Primary Text */
   --color-white: #ffffff;
+  --color-header-bg: rgba(15, 23, 42, 0.8);
+  --color-ai-bg: rgba(2, 6, 23, 0.5);
 
   /* --- Semantic Colors --- */
   --color-danger: #ef4444; /* Critical/Fatal */
@@ -38,6 +41,42 @@
   /* --- Typography --- */
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Monaco', monospace;
+}
+
+[data-theme='light'] {
+  --color-slate-950: #f8fafc; /* App Background */
+  --color-slate-900: #ffffff; /* Panel Backgrounds */
+  --color-slate-800: #f1f5f9; /* Card Backgrounds / Hover */
+  --color-slate-700: #cbd5e1; /* Borders */
+  --color-slate-600: #64748b; /* Muted Text */
+  --color-slate-400: #475569; /* Secondary Text */
+  --color-slate-200: #0f172a; /* Primary Text */
+  --color-white: #0f172a; /* Headings / Active elements */
+  --color-header-bg: rgba(255, 255, 255, 0.8);
+  --color-ai-bg: rgba(239, 246, 255, 0.8);
+
+  --color-danger-bg: #fef2f2;
+  --color-warning-bg: #fff7ed;
+  --color-success-bg: #ecfdf5;
+  --color-info-bg: #eff6ff;
+}
+
+.theme-toggle-btn {
+  background: transparent;
+  border: 1px solid var(--color-slate-700);
+  color: var(--color-slate-200);
+  border-radius: 4px;
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  background-color: var(--color-slate-800);
+  border-color: var(--color-slate-600);
 }
 
 * {

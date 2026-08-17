@@ -35,7 +35,7 @@ const Layout = ({ header, sidebar, children, rightPanel }) => {
           gridRow: '1 / 2',
           gridColumn: '2 / 4',
           borderBottom: '1px solid var(--color-slate-700)',
-          backgroundColor: 'rgba(15, 23, 42, 0.8)' /* slate-900 with opacity */,
+          backgroundColor: 'var(--color-header-bg)',
           backdropFilter: 'blur(8px)',
           display: 'flex',
           alignItems: 'center',

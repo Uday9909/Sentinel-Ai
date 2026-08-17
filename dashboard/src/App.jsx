@@ -7,6 +7,8 @@ import {
   Clock,
   Search,
   WifiOff,
+  Sun,
+  Moon,
 } from 'lucide-react'
 import Layout from './components/Layout'
 import LogCard from './components/LogCard'
@@ -24,6 +26,9 @@ const computeBackoffDelay = (retryCount) => {
 }
 
 function App() {
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('theme') || 'dark'
+  })
   const [logs, setLogs] = useState([])
   const [selectedLog, setSelectedLog] = useState(null)
   const [stats, setStats] = useState({ total: 0, anomalies: 0, critical: 0 })
@@ -33,6 +38,15 @@ function App() {
   const retryCountRef = useRef(0)
   const timerRef = useRef(null)
   const fetchLogsRef = useRef(null)
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((prevTheme) => (prevTheme === 'dark' ? 'light' : 'dark'))
+  }
 
   const scheduleNextFetch = (delay) => {
     if (timerRef.current) {
@@ -262,6 +276,17 @@ function App() {
           <Search size={14} style={{ marginRight: '8px' }} />
           <span style={{ fontSize: '12px' }}>Search logs...</span>
         </div>
+
+        {/* Theme Toggle Button */}
+        <button
+          onClick={toggleTheme}
+          className="theme-toggle-btn"
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          aria-label="Toggle theme"
+          data-testid="theme-toggle"
+        >
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
       </div>
     </>
   )

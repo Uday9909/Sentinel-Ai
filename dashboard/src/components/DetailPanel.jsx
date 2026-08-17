@@ -88,7 +88,7 @@ const DetailPanel = ({ log, onClose }) => {
       {isAnomaly && (
         <div
           style={{
-            backgroundColor: 'rgba(2, 6, 23, 0.5)',
+            backgroundColor: 'var(--color-ai-bg)',
             border: '1px solid var(--color-info)',
             borderRadius: '8px',
             padding: 'var(--space-md)',
