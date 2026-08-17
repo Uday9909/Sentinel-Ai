@@ -22,3 +22,5 @@
 - **hardikkaurani** ([@hardikkaurani](https://github.com/hardikkaurani)) — first-time contributor
 
 - **Thrizzio** ([@Thrizzio](https://github.com/Thrizzio)) — first-time contributor
+
+- **sharancreates** ([@sharancreates](https://github.com/sharancreates)) — first-time contributor
