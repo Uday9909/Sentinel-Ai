@@ -386,7 +386,31 @@ func (s *Server) Start(addr string) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.http.Shutdown(ctx)
+	var httpErr error
+	if s.http != nil {
+		httpErr = s.http.Shutdown(ctx)
+	}
+
+	if s.queue != nil {
+		close(s.queue)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if httpErr != nil {
+			return httpErr
+		}
+		return ctx.Err()
+	}
+
+	return httpErr
 }
 
 func main() {
@@ -396,8 +420,9 @@ func main() {
 	}
 
 	writer := newKafkaLogWriter(kafkaBroker)
+	dlqWriter := newKafkaDLQWriter(kafkaBroker)
 
-	srv := NewServer(writer)
+	srv := NewServer(writer, dlqWriter)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -425,6 +450,10 @@ func main() {
 
 	if err := writer.Close(); err != nil {
 		log.Printf("kafka writer close error: %v", err)
+	}
+
+	if err := dlqWriter.Close(); err != nil {
+		log.Printf("kafka dlq writer close error: %v", err)
 	}
 
 	log.Println("shutdown complete")
