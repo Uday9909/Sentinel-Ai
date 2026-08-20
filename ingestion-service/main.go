@@ -121,7 +121,13 @@ type LogJob struct {
 	Raw   []byte
 }
 
-const defaultQueueCapacity = 10000
+const (
+	defaultQueueCapacity = 10000
+	defaultWorkerCount   = 4
+	maxRetries           = 3
+	initialBackoff       = 100 * time.Millisecond
+	maxBackoff           = 2000 * time.Millisecond
+)
 
 func getQueueCapacity() int {
 	if s := os.Getenv("INGEST_QUEUE_CAPACITY"); s != "" {
@@ -132,20 +138,96 @@ func getQueueCapacity() int {
 	return defaultQueueCapacity
 }
 
-type Server struct {
-	writer logWriter
-	router *gin.Engine
-	http   *http.Server
-	queue  chan LogJob
+func getWorkerCount() int {
+	if s := os.Getenv("INGEST_WORKERS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultWorkerCount
 }
 
-func NewServer(writer logWriter) *Server {
+func computeBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		return initialBackoff
+	}
+	delay := initialBackoff * time.Duration(1<<(attempt-1))
+	if delay > maxBackoff {
+		return maxBackoff
+	}
+	return delay
+}
+
+type Server struct {
+	writer      logWriter
+	dlqWriter   logWriter
+	router      *gin.Engine
+	http        *http.Server
+	queue       chan LogJob
+	workerCount int
+	wg          sync.WaitGroup
+	sleepFn     func(time.Duration)
+}
+
+func NewServer(writer logWriter, dlqWriters ...logWriter) *Server {
+	var dlq logWriter
+	if len(dlqWriters) > 0 {
+		dlq = dlqWriters[0]
+	}
 	s := &Server{
-		writer: writer,
-		queue:  make(chan LogJob, getQueueCapacity()),
+		writer:      writer,
+		dlqWriter:   dlq,
+		queue:       make(chan LogJob, getQueueCapacity()),
+		workerCount: getWorkerCount(),
+		sleepFn:     time.Sleep,
 	}
 	s.router = s.setupRouter()
+	s.startWorkers()
 	return s
+}
+
+func (s *Server) startWorkers() {
+	for i := 0; i < s.workerCount; i++ {
+		s.wg.Add(1)
+		go s.workerLoop()
+	}
+}
+
+func (s *Server) workerLoop() {
+	defer s.wg.Done()
+	for job := range s.queue {
+		s.processJob(job)
+	}
+}
+
+func (s *Server) processJob(job LogJob) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := computeBackoff(attempt)
+			if s.sleepFn != nil {
+				s.sleepFn(backoff)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := s.writer.WriteMessages(ctx, kafka.Message{
+			Key:   []byte(job.Entry.Service),
+			Value: job.Raw,
+		})
+		cancel()
+
+		if err == nil {
+			logsIngested.WithLabelValues(job.Entry.Service, job.Entry.Level).Inc()
+			return
+		}
+		lastErr = err
+		log.Printf("kafka write attempt %d failed for service %s: %v", attempt+1, job.Entry.Service, err)
+	}
+
+	if lastErr != nil {
+		log.Printf("retries exhausted for service %s: %v", job.Entry.Service, lastErr)
+	}
 }
 
 func (s *Server) setupRouter() *gin.Engine {
