@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -140,7 +141,7 @@ func getQueueCapacity() int {
 
 func getWorkerCount() int {
 	if s := os.Getenv("INGEST_WORKERS"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
 			return n
 		}
 	}
