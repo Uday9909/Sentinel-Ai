@@ -200,6 +200,25 @@ func (s *Server) workerLoop() {
 	}
 }
 
+type DLQPayload struct {
+	OriginalLog   LogEntry `json:"original_log"`
+	OriginalTopic string   `json:"original_topic"`
+	RetryCount    int      `json:"retry_count"`
+	FailureReason string   `json:"failure_reason"`
+	FailedAt      int64    `json:"failed_at"`
+}
+
+func newKafkaDLQWriter(broker string) *kafkaLogWriter {
+	return &kafkaLogWriter{
+		Writer: &kafka.Writer{
+			Addr:     kafka.TCP(broker),
+			Topic:    "raw-logs-dlq",
+			Balancer: &kafka.Hash{},
+		},
+		broker: broker,
+	}
+}
+
 func (s *Server) processJob(job LogJob) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -225,9 +244,51 @@ func (s *Server) processJob(job LogJob) {
 		log.Printf("kafka write attempt %d failed for service %s: %v", attempt+1, job.Entry.Service, err)
 	}
 
+	s.routeToDLQ(job, lastErr)
+}
+
+func (s *Server) routeToDLQ(job LogJob, lastErr error) {
+	errMsg := "unknown error"
 	if lastErr != nil {
-		log.Printf("retries exhausted for service %s: %v", job.Entry.Service, lastErr)
+		errMsg = lastErr.Error()
 	}
+
+	dlqMsg := DLQPayload{
+		OriginalLog:   job.Entry,
+		OriginalTopic: "raw-logs",
+		RetryCount:    maxRetries,
+		FailureReason: errMsg,
+		FailedAt:      time.Now().Unix(),
+	}
+
+	val, err := json.Marshal(dlqMsg)
+	if err != nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("failed to marshal DLQ payload for service %s: %v", job.Entry.Service, err)
+		return
+	}
+
+	if s.dlqWriter == nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("DLQ writer not configured for service %s", job.Entry.Service)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = s.dlqWriter.WriteMessages(ctx, kafka.Message{
+		Key:   []byte(job.Entry.Service),
+		Value: val,
+	})
+	cancel()
+
+	if err != nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("failed to write to DLQ for service %s: %v", job.Entry.Service, err)
+		return
+	}
+
+	logsDLQTotal.WithLabelValues(job.Entry.Service, "retry_exhaustion").Inc()
+	log.Printf("successfully routed log for service %s to DLQ topic 'raw-logs-dlq'", job.Entry.Service)
 }
 
 func (s *Server) setupRouter() *gin.Engine {
