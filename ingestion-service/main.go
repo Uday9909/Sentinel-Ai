@@ -116,14 +116,34 @@ func (w *kafkaLogWriter) Ping(ctx context.Context) error {
 	return conn.Close()
 }
 
+type LogJob struct {
+	Entry LogEntry
+	Raw   []byte
+}
+
+const defaultQueueCapacity = 10000
+
+func getQueueCapacity() int {
+	if s := os.Getenv("INGEST_QUEUE_CAPACITY"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultQueueCapacity
+}
+
 type Server struct {
 	writer logWriter
 	router *gin.Engine
 	http   *http.Server
+	queue  chan LogJob
 }
 
 func NewServer(writer logWriter) *Server {
-	s := &Server{writer: writer}
+	s := &Server{
+		writer: writer,
+		queue:  make(chan LogJob, getQueueCapacity()),
+	}
 	s.router = s.setupRouter()
 	return s
 }
@@ -199,32 +219,19 @@ func (s *Server) handleIngest(c *gin.Context) {
 		return
 	}
 
-	// Use the request's context with a timeout so a slow/broken Kafka doesn't
-	// hold the connection open indefinitely.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-
-	err = s.writer.WriteMessages(ctx,
-		kafka.Message{
-			Key:   []byte(entry.Service),
-			Value: val,
-		},
-	)
-
-	duration := time.Since(start).Seconds()
-	if err != nil {
-		ingestionLatency.WithLabelValues("error").Observe(duration)
-		if errors.Is(err, context.DeadlineExceeded) {
-			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "kafka write timed out"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send to kafka"})
-		return
+	job := LogJob{
+		Entry: entry,
+		Raw:   val,
 	}
 
-	ingestionLatency.WithLabelValues("success").Observe(duration)
-	logsIngested.WithLabelValues(entry.Service, entry.Level).Inc()
-	c.JSON(http.StatusOK, gin.H{"status": "log received"})
+	select {
+	case s.queue <- job:
+		ingestionLatency.WithLabelValues("success").Observe(time.Since(start).Seconds())
+		c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "message": "log queued for ingestion"})
+	default:
+		ingestionLatency.WithLabelValues("rate_limited").Observe(time.Since(start).Seconds())
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingestion queue full, retry later"})
+	}
 }
 
 func (s *Server) Start(addr string) error {
