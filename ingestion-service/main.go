@@ -57,11 +57,29 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	logsDLQTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "logs_dlq_total",
+			Help: "Total number of logs sent to the Dead Letter Queue (DLQ)",
+		},
+		[]string{"service", "reason"},
+	)
+
+	dlqWriteFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dlq_write_failures_total",
+			Help: "Total number of failed attempts to write to the Dead Letter Queue (DLQ)",
+		},
+		[]string{"service"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(logsIngested)
 	prometheus.MustRegister(ingestionLatency)
+	prometheus.MustRegister(logsDLQTotal)
+	prometheus.MustRegister(dlqWriteFailuresTotal)
 }
 
 // logWriter is satisfied by kafkaLogWriter (or mockWriter in tests) and allows mock injection in tests.
