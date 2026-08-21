@@ -370,10 +370,15 @@ func (s *Server) handleIngest(c *gin.Context) {
 	}
 
 	select {
-	case s.queue <- job:
-		c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "message": "log queued for ingestion"})
 	case <-s.shutdownCh:
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "server shutting down"})
+		return
+	default:
+	}
+
+	select {
+	case s.queue <- job:
+		c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "message": "log queued for ingestion"})
 	default:
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingestion queue full, retry later"})
 	}
