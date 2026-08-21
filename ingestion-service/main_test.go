@@ -23,24 +23,32 @@ type mockWriter struct {
 	closeErr   error
 	writeCount int
 	gotMsgs    []kafka.Message
+	onWrite    func()
 }
 
 func (m *mockWriter) WriteMessages(ctx context.Context, msgs ...kafka.Message) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.writeCount++
-	if m.writeErr != nil {
-		if errors.Is(m.writeErr, context.DeadlineExceeded) {
+	writeErr := m.writeErr
+	onWrite := m.onWrite
+	if len(msgs) > 0 {
+		m.gotMsgs = append(m.gotMsgs, msgs...)
+	}
+	m.mu.Unlock()
+
+	if onWrite != nil {
+		onWrite()
+	}
+
+	if writeErr != nil {
+		if errors.Is(writeErr, context.DeadlineExceeded) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
 		}
-		return m.writeErr
-	}
-	if len(msgs) > 0 {
-		m.gotMsgs = append(m.gotMsgs, msgs...)
+		return writeErr
 	}
 	return nil
 }
@@ -161,33 +169,116 @@ func TestHandleIngest_MissingLevel(t *testing.T) {
 
 func TestHandleIngest_QueueFull_429(t *testing.T) {
 	t.Setenv("INGEST_QUEUE_CAPACITY", "1")
-	t.Setenv("INGEST_WORKERS", "0")
-	mw := &mockWriter{}
-	srv := NewServer(mw)
-	defer srv.Shutdown(context.Background())
+	t.Setenv("INGEST_WORKERS", "1")
+
+	blockCh := make(chan struct{})
+	blockingWriter := &mockWriter{
+		onWrite: func() {
+			<-blockCh
+		},
+	}
+	srv := NewServer(blockingWriter)
+	defer func() {
+		close(blockCh)
+		srv.Shutdown(context.Background())
+	}()
 
 	body := `{"service":"test-svc","level":"info","message":"hello"}`
 
-	// Saturate queue of capacity 1
+	// 1st request: worker consumes and blocks on WriteMessages
 	req1 := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
 	req1.Header.Set("Content-Type", "application/json")
 	rec1 := httptest.NewRecorder()
 	srv.router.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 on req1, got %d", rec1.Code)
+	}
 
-	// Second request when queue is full returns 429
+	// Wait until worker is blocked inside onWrite
+	for i := 0; i < 50; i++ {
+		if blockingWriter.getWriteCount() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2nd request: fills queue of capacity 1
 	req2 := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	rec2 := httptest.NewRecorder()
 	srv.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 on req2 (queue slot 1), got %d", rec2.Code)
+	}
 
-	if rec2.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429 Too Many Requests on full queue, got %d", rec2.Code)
+	// 3rd request: queue is 100% full, returns 429
+	req3 := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	srv.router.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests on full queue, got %d", rec3.Code)
 	}
 
 	var resp map[string]string
-	json.Unmarshal(rec2.Body.Bytes(), &resp)
+	json.Unmarshal(rec3.Body.Bytes(), &resp)
 	if resp["error"] != "ingestion queue full, retry later" {
 		t.Errorf("expected 'ingestion queue full, retry later', got %q", resp["error"])
+	}
+}
+
+func TestWorkerCountConfigValidation(t *testing.T) {
+	tests := []struct {
+		envVal   string
+		expected int
+	}{
+		{"0", defaultWorkerCount},
+		{"-1", defaultWorkerCount},
+		{"invalid", defaultWorkerCount},
+		{"2", 2},
+	}
+
+	for _, tt := range tests {
+		t.Setenv("INGEST_WORKERS", tt.envVal)
+		count := getWorkerCount()
+		if count != tt.expected {
+			t.Errorf("INGEST_WORKERS=%q: expected worker count %d, got %d", tt.envVal, tt.expected, count)
+		}
+	}
+}
+
+func TestAsyncIngestion_EndToEnd(t *testing.T) {
+	mw := &mockWriter{}
+	srv := NewServer(mw)
+	defer srv.Shutdown(context.Background())
+
+	body := `{"service":"e2e-svc","level":"warn","message":"end to end test"}`
+	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d", rec.Code)
+	}
+
+	// Wait deterministically for worker loop to process item
+	var msg kafka.Message
+	for i := 0; i < 50; i++ {
+		msgs := mw.getMsgs()
+		if len(msgs) > 0 {
+			msg = msgs[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if string(msg.Key) != "e2e-svc" {
+		t.Fatalf("expected message key 'e2e-svc', got %q", string(msg.Key))
+	}
+	if !strings.Contains(string(msg.Value), "end to end test") {
+		t.Errorf("expected message value to contain 'end to end test', got %s", string(msg.Value))
 	}
 }
 
@@ -263,7 +354,6 @@ func TestWorker_DLQFailureHandled(t *testing.T) {
 		Raw:   []byte(`{"service":"test-svc","level":"error","message":"unreachable"}`),
 	}
 
-	// Should process retries and attempt DLQ write without crashing or deadlocking
 	srv.processJob(job)
 
 	if mainWriter.getWriteCount() != 4 {
@@ -312,5 +402,94 @@ func TestHealthz_Healthy(t *testing.T) {
 	}
 	if resp["status"] != "ok" {
 		t.Errorf("expected status 'ok', got %q", resp["status"])
+	}
+}
+
+func TestHealthz_Unhealthy(t *testing.T) {
+	mw := &mockWriter{pingErr: errors.New("broker unavailable")}
+	srv := NewServer(mw)
+	defer srv.Shutdown(context.Background())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHealthz_NilWriter(t *testing.T) {
+	srv := NewServer(nil)
+	defer srv.Shutdown(context.Background())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestTimestampAutoFill(t *testing.T) {
+	mw := &mockWriter{}
+	srv := NewServer(mw)
+	defer srv.Shutdown(context.Background())
+
+	body := `{"service":"test-svc","level":"info","message":"no timestamp"}`
+	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+
+	var msg kafka.Message
+	for i := 0; i < 50; i++ {
+		msgs := mw.getMsgs()
+		if len(msgs) > 0 {
+			msg = msgs[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if string(msg.Key) != "test-svc" {
+		t.Fatalf("expected key 'test-svc', got %q", string(msg.Key))
+	}
+
+	var entry LogEntry
+	if err := json.Unmarshal(msg.Value, &entry); err != nil {
+		t.Fatalf("failed to unmarshal message: %v", err)
+	}
+	if entry.Timestamp == 0 {
+		t.Error("expected non-zero timestamp auto-filled")
+	}
+}
+
+func TestShutdown_NoSendOnClosedChannel(t *testing.T) {
+	mw := &mockWriter{}
+	srv := NewServer(mw)
+
+	// Shutdown server
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("unexpected error during shutdown: %v", err)
+	}
+
+	// Incoming HTTP request during/after shutdown returns 503 Service Unavailable without panic
+	body := `{"service":"test-svc","level":"info","message":"during shutdown"}`
+	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 Service Unavailable after shutdown, got %d", rec.Code)
 	}
 }

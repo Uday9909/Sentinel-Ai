@@ -127,7 +127,6 @@ const (
 	defaultWorkerCount   = 4
 	maxRetries           = 3
 	initialBackoff       = 100 * time.Millisecond
-	maxBackoff           = 2000 * time.Millisecond
 )
 
 func getQueueCapacity() int {
@@ -141,7 +140,7 @@ func getQueueCapacity() int {
 
 func getWorkerCount() int {
 	if s := os.Getenv("INGEST_WORKERS"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 {
 			return n
 		}
 	}
@@ -152,22 +151,20 @@ func computeBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
 		return initialBackoff
 	}
-	delay := initialBackoff * time.Duration(1<<(attempt-1))
-	if delay > maxBackoff {
-		return maxBackoff
-	}
-	return delay
+	return initialBackoff * time.Duration(1<<(attempt-1))
 }
 
 type Server struct {
-	writer      logWriter
-	dlqWriter   logWriter
-	router      *gin.Engine
-	http        *http.Server
-	queue       chan LogJob
-	workerCount int
-	wg          sync.WaitGroup
-	sleepFn     func(time.Duration)
+	writer       logWriter
+	dlqWriter    logWriter
+	router       *gin.Engine
+	http         *http.Server
+	queue        chan LogJob
+	workerCount  int
+	wg           sync.WaitGroup
+	sleepFn      func(time.Duration)
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 }
 
 func NewServer(writer logWriter, dlqWriters ...logWriter) *Server {
@@ -181,6 +178,7 @@ func NewServer(writer logWriter, dlqWriters ...logWriter) *Server {
 		queue:       make(chan LogJob, getQueueCapacity()),
 		workerCount: getWorkerCount(),
 		sleepFn:     time.Sleep,
+		shutdownCh:  make(chan struct{}),
 	}
 	s.router = s.setupRouter()
 	s.startWorkers()
@@ -209,6 +207,8 @@ type DLQPayload struct {
 	FailedAt      int64    `json:"failed_at"`
 }
 
+// newKafkaDLQWriter initializes a kafkaLogWriter for the "raw-logs-dlq" topic,
+// which is the designated dead letter queue topic for exhausted ingestion retries.
 func newKafkaDLQWriter(broker string) *kafkaLogWriter {
 	return &kafkaLogWriter{
 		Writer: &kafka.Writer{
@@ -231,16 +231,20 @@ func (s *Server) processJob(job LogJob) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		writeStart := time.Now()
 		err := s.writer.WriteMessages(ctx, kafka.Message{
 			Key:   []byte(job.Entry.Service),
 			Value: job.Raw,
 		})
+		writeDuration := time.Since(writeStart).Seconds()
 		cancel()
 
 		if err == nil {
+			ingestionLatency.WithLabelValues("success").Observe(writeDuration)
 			logsIngested.WithLabelValues(job.Entry.Service, job.Entry.Level).Inc()
 			return
 		}
+		ingestionLatency.WithLabelValues("error").Observe(writeDuration)
 		lastErr = err
 		log.Printf("kafka write attempt %d failed for service %s: %v", attempt+1, job.Entry.Service, err)
 	}
@@ -325,8 +329,6 @@ func (s *Server) handleHealthz(c *gin.Context) {
 }
 
 func (s *Server) handleIngest(c *gin.Context) {
-	start := time.Now()
-
 	// Limit request body to 1 MB to prevent memory exhaustion from
 	// malicious or misconfigured clients. http.MaxBytesReader returns
 	// a *http.MaxBytesError when the limit is exceeded.
@@ -358,7 +360,6 @@ func (s *Server) handleIngest(c *gin.Context) {
 
 	val, err := json.Marshal(entry)
 	if err != nil {
-		ingestionLatency.WithLabelValues("error").Observe(time.Since(start).Seconds())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to serialize log entry"})
 		return
 	}
@@ -370,10 +371,10 @@ func (s *Server) handleIngest(c *gin.Context) {
 
 	select {
 	case s.queue <- job:
-		ingestionLatency.WithLabelValues("success").Observe(time.Since(start).Seconds())
 		c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "message": "log queued for ingestion"})
+	case <-s.shutdownCh:
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "server shutting down"})
 	default:
-		ingestionLatency.WithLabelValues("rate_limited").Observe(time.Since(start).Seconds())
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingestion queue full, retry later"})
 	}
 }
@@ -392,9 +393,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		httpErr = s.http.Shutdown(ctx)
 	}
 
-	if s.queue != nil {
-		close(s.queue)
-	}
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownCh)
+		if s.queue != nil {
+			close(s.queue)
+		}
+	})
 
 	done := make(chan struct{})
 	go func() {
