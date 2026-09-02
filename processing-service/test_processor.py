@@ -11,12 +11,14 @@ import numpy as np
 import pytest
 from sklearn.ensemble import IsolationForest
 
+import processor
 from processor import (
     KAFKA_RECONNECT_BACKOFF_MAX_MS,
     KAFKA_RECONNECT_BACKOFF_MS,
     KAFKA_RECONNECT_INITIAL_DELAY_SEC,
     KAFKA_RETRY_BACKOFF_MS,
     OLLAMA_COOLDOWN_SEC,
+    OLLAMA_MODEL,
     TRAIN_INTERVAL,
     check_rate_anomaly,
     has_keyword_indicator,
@@ -177,6 +179,41 @@ def test_run_ai_analysis_ollama_exception():
     assert "Unavailable" in summary
     # new_failure should be recent (updated to now)
     assert new_failure > past_failure
+
+
+def test_run_ai_analysis_uses_configured_model():
+    """The chat() call must use OLLAMA_MODEL, not a hardcoded model name."""
+    log_data = {"service": "test"}
+    past_failure = time.time() - OLLAMA_COOLDOWN_SEC - 10
+
+    with patch("processor._ollama_client.chat") as mock_chat:
+        mock_chat.return_value = {"message": {"content": "Normal"}}
+        run_ai_analysis("some info log", log_data, past_failure)
+
+    assert mock_chat.call_args.kwargs["model"] == OLLAMA_MODEL
+
+
+def test_ollama_model_env_var_overrides_default(monkeypatch):
+    """OLLAMA_MODEL is read from the environment at import time (with
+    "llama3.2:1b" as the default), and run_ai_analysis always uses the
+    current module-level value rather than a hardcoded literal - so
+    reconfiguring OLLAMA_MODEL changes the model used with no code change.
+    (monkeypatch.setattr on the already-imported module is used instead of
+    importlib.reload, because reloading processor.py re-executes its
+    module-level prometheus_client.Counter/Histogram registrations and
+    raises "Duplicated timeseries in CollectorRegistry".)
+    """
+    assert processor.OLLAMA_MODEL == "llama3.2:1b"  # unchanged default
+
+    monkeypatch.setattr(processor, "OLLAMA_MODEL", "custom-model:latest")
+
+    log_data = {"service": "test"}
+    past_failure = time.time() - OLLAMA_COOLDOWN_SEC - 10
+    with patch("processor._ollama_client.chat") as mock_chat:
+        mock_chat.return_value = {"message": {"content": "Normal"}}
+        processor.run_ai_analysis("some info log", log_data, past_failure)
+
+    assert mock_chat.call_args.kwargs["model"] == "custom-model:latest"
 
 
 def test_build_kafka_consumer_sets_backoff_config():
