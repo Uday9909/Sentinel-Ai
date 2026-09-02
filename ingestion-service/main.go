@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,11 +58,29 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	logsDLQTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "logs_dlq_total",
+			Help: "Total number of logs sent to the Dead Letter Queue (DLQ)",
+		},
+		[]string{"service", "reason"},
+	)
+
+	dlqWriteFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dlq_write_failures_total",
+			Help: "Total number of failed attempts to write to the Dead Letter Queue (DLQ)",
+		},
+		[]string{"service"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(logsIngested)
 	prometheus.MustRegister(ingestionLatency)
+	prometheus.MustRegister(logsDLQTotal)
+	prometheus.MustRegister(dlqWriteFailuresTotal)
 }
 
 // logWriter is satisfied by kafkaLogWriter (or mockWriter in tests) and allows mock injection in tests.
@@ -98,16 +117,183 @@ func (w *kafkaLogWriter) Ping(ctx context.Context) error {
 	return conn.Close()
 }
 
-type Server struct {
-	writer logWriter
-	router *gin.Engine
-	http   *http.Server
+type LogJob struct {
+	Entry LogEntry
+	Raw   []byte
 }
 
-func NewServer(writer logWriter) *Server {
-	s := &Server{writer: writer}
+const (
+	defaultQueueCapacity = 10000
+	defaultWorkerCount   = 4
+	maxRetries           = 3
+	initialBackoff       = 100 * time.Millisecond
+)
+
+func getQueueCapacity() int {
+	if s := os.Getenv("INGEST_QUEUE_CAPACITY"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultQueueCapacity
+}
+
+func getWorkerCount() int {
+	if s := os.Getenv("INGEST_WORKERS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 {
+			return n
+		}
+	}
+	return defaultWorkerCount
+}
+
+func computeBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		return initialBackoff
+	}
+	return initialBackoff * time.Duration(1<<(attempt-1))
+}
+
+type Server struct {
+	writer       logWriter
+	dlqWriter    logWriter
+	router       *gin.Engine
+	http         *http.Server
+	queue        chan LogJob
+	workerCount  int
+	wg           sync.WaitGroup
+	sleepFn      func(time.Duration)
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
+}
+
+func NewServer(writer logWriter, dlqWriters ...logWriter) *Server {
+	var dlq logWriter
+	if len(dlqWriters) > 0 {
+		dlq = dlqWriters[0]
+	}
+	s := &Server{
+		writer:      writer,
+		dlqWriter:   dlq,
+		queue:       make(chan LogJob, getQueueCapacity()),
+		workerCount: getWorkerCount(),
+		sleepFn:     time.Sleep,
+		shutdownCh:  make(chan struct{}),
+	}
 	s.router = s.setupRouter()
+	s.startWorkers()
 	return s
+}
+
+func (s *Server) startWorkers() {
+	for i := 0; i < s.workerCount; i++ {
+		s.wg.Add(1)
+		go s.workerLoop()
+	}
+}
+
+func (s *Server) workerLoop() {
+	defer s.wg.Done()
+	for job := range s.queue {
+		s.processJob(job)
+	}
+}
+
+type DLQPayload struct {
+	OriginalLog   LogEntry `json:"original_log"`
+	OriginalTopic string   `json:"original_topic"`
+	RetryCount    int      `json:"retry_count"`
+	FailureReason string   `json:"failure_reason"`
+	FailedAt      int64    `json:"failed_at"`
+}
+
+// newKafkaDLQWriter initializes a kafkaLogWriter for the "raw-logs-dlq" topic,
+// which is the designated dead letter queue topic for exhausted ingestion retries.
+func newKafkaDLQWriter(broker string) *kafkaLogWriter {
+	return &kafkaLogWriter{
+		Writer: &kafka.Writer{
+			Addr:     kafka.TCP(broker),
+			Topic:    "raw-logs-dlq",
+			Balancer: &kafka.Hash{},
+		},
+		broker: broker,
+	}
+}
+
+func (s *Server) processJob(job LogJob) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := computeBackoff(attempt)
+			if s.sleepFn != nil {
+				s.sleepFn(backoff)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		writeStart := time.Now()
+		err := s.writer.WriteMessages(ctx, kafka.Message{
+			Key:   []byte(job.Entry.Service),
+			Value: job.Raw,
+		})
+		writeDuration := time.Since(writeStart).Seconds()
+		cancel()
+
+		if err == nil {
+			ingestionLatency.WithLabelValues("success").Observe(writeDuration)
+			logsIngested.WithLabelValues(job.Entry.Service, job.Entry.Level).Inc()
+			return
+		}
+		ingestionLatency.WithLabelValues("error").Observe(writeDuration)
+		lastErr = err
+		log.Printf("kafka write attempt %d failed for service %s: %v", attempt+1, job.Entry.Service, err)
+	}
+
+	s.routeToDLQ(job, lastErr)
+}
+
+func (s *Server) routeToDLQ(job LogJob, lastErr error) {
+	errMsg := "unknown error"
+	if lastErr != nil {
+		errMsg = lastErr.Error()
+	}
+
+	dlqMsg := DLQPayload{
+		OriginalLog:   job.Entry,
+		OriginalTopic: "raw-logs",
+		RetryCount:    maxRetries,
+		FailureReason: errMsg,
+		FailedAt:      time.Now().Unix(),
+	}
+
+	val, err := json.Marshal(dlqMsg)
+	if err != nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("failed to marshal DLQ payload for service %s: %v", job.Entry.Service, err)
+		return
+	}
+
+	if s.dlqWriter == nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("DLQ writer not configured for service %s", job.Entry.Service)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = s.dlqWriter.WriteMessages(ctx, kafka.Message{
+		Key:   []byte(job.Entry.Service),
+		Value: val,
+	})
+	cancel()
+
+	if err != nil {
+		dlqWriteFailuresTotal.WithLabelValues(job.Entry.Service).Inc()
+		log.Printf("failed to write to DLQ for service %s: %v", job.Entry.Service, err)
+		return
+	}
+
+	logsDLQTotal.WithLabelValues(job.Entry.Service, "retry_exhaustion").Inc()
+	log.Printf("successfully routed log for service %s to DLQ topic 'raw-logs-dlq'", job.Entry.Service)
 }
 
 func (s *Server) setupRouter() *gin.Engine {
@@ -143,8 +329,6 @@ func (s *Server) handleHealthz(c *gin.Context) {
 }
 
 func (s *Server) handleIngest(c *gin.Context) {
-	start := time.Now()
-
 	// Limit request body to 1 MB to prevent memory exhaustion from
 	// malicious or misconfigured clients. http.MaxBytesReader returns
 	// a *http.MaxBytesError when the limit is exceeded.
@@ -176,37 +360,28 @@ func (s *Server) handleIngest(c *gin.Context) {
 
 	val, err := json.Marshal(entry)
 	if err != nil {
-		ingestionLatency.WithLabelValues("error").Observe(time.Since(start).Seconds())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to serialize log entry"})
 		return
 	}
 
-	// Use the request's context with a timeout so a slow/broken Kafka doesn't
-	// hold the connection open indefinitely.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-
-	err = s.writer.WriteMessages(ctx,
-		kafka.Message{
-			Key:   []byte(entry.Service),
-			Value: val,
-		},
-	)
-
-	duration := time.Since(start).Seconds()
-	if err != nil {
-		ingestionLatency.WithLabelValues("error").Observe(duration)
-		if errors.Is(err, context.DeadlineExceeded) {
-			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "kafka write timed out"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send to kafka"})
-		return
+	job := LogJob{
+		Entry: entry,
+		Raw:   val,
 	}
 
-	ingestionLatency.WithLabelValues("success").Observe(duration)
-	logsIngested.WithLabelValues(entry.Service, entry.Level).Inc()
-	c.JSON(http.StatusOK, gin.H{"status": "log received"})
+	select {
+	case <-s.shutdownCh:
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "server shutting down"})
+		return
+	default:
+	}
+
+	select {
+	case s.queue <- job:
+		c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "message": "log queued for ingestion"})
+	default:
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "ingestion queue full, retry later"})
+	}
 }
 
 func (s *Server) Start(addr string) error {
@@ -218,7 +393,34 @@ func (s *Server) Start(addr string) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.http.Shutdown(ctx)
+	var httpErr error
+	if s.http != nil {
+		httpErr = s.http.Shutdown(ctx)
+	}
+
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownCh)
+		if s.queue != nil {
+			close(s.queue)
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if httpErr != nil {
+			return httpErr
+		}
+		return ctx.Err()
+	}
+
+	return httpErr
 }
 
 func main() {
@@ -228,8 +430,9 @@ func main() {
 	}
 
 	writer := newKafkaLogWriter(kafkaBroker)
+	dlqWriter := newKafkaDLQWriter(kafkaBroker)
 
-	srv := NewServer(writer)
+	srv := NewServer(writer, dlqWriter)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -257,6 +460,10 @@ func main() {
 
 	if err := writer.Close(); err != nil {
 		log.Printf("kafka writer close error: %v", err)
+	}
+
+	if err := dlqWriter.Close(); err != nil {
+		log.Printf("kafka dlq writer close error: %v", err)
 	}
 
 	log.Println("shutdown complete")
