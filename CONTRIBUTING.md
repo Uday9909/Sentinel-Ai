@@ -234,7 +234,7 @@ Trivial changes (auto-formatting, variable renames, comment generation) do not n
 
 ## Good First Issues
 
-Check out the [`good first issue`](https://github.com/Uday9909/Sentinel-Ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label on GitHub for starter-friendly tasks. See [GOOD_FIRST_ISSUES.md](./GOOD_FIRST_ISSUES.md) for detailed descriptions.
+Check out the [`good first issue`](https://github.com/Uday9909/Sentinel-Ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label on GitHub for starter-friendly tasks.
 
 ---
 
