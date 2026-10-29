@@ -4,29 +4,69 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
 
-### Fixed
 
-- Verify Kafka connectivity in ingestion service `/healthz` endpoint (#9)
 
 ### Added
 
-- Async Kafka writes with bounded queue, exponential backoff retry, and DLQ routing (#29)
-- Exponential backoff for dashboard polling on connection errors (#8)
-- Initial open-source release
-- Real-time log ingestion via Go (Gin) HTTP API on port 8080
-- Kafka-based event streaming with service-level partitioning
-- Isolation Forest anomaly detection with periodic model persistence
-- Ollama LLM-powered Root Cause Analysis (RCA) using llama3.2:1b
-- React + Vite "Mission Control" dashboard with real-time updates
-- Elasticsearch log storage and search
-- Prometheus metrics (logs ingested, anomalies detected, processing duration)
-- Grafana dashboards with pre-configured provisioning
-- Docker Compose setup for all infrastructure dependencies
-- Story mode demo script generating realistic incident scenarios
-- MIT license
-- Contributor guidelines, code of conduct, and issue/PR templates
-- CI/CD pipeline with Go, Python, and React checks
-- Architecture Decision Records (ADR)
+- Add request body size limit to ingestion endpoint ([#16](https://github.com/Uday9909/Sentinel-Ai/issues/16))
+- *(ingestion)* Verify kafka connectivity in healthz endpoint ([#9](https://github.com/Uday9909/Sentinel-Ai/issues/9))
+- *(dashboard)* Implement exponential backoff polling logic
+- *(dashboard)* Add light/dark theme toggle persisted in localStorage
+- *(ingestion)* Add dlq and worker metrics
+- *(ingestion)* Implement bounded log queue and async handler
+- *(ingestion)* Add worker pool with exponential backoff retry
+- *(ingestion)* Implement dlq fallback for retry exhaustion
+- *(ingestion)* Add graceful worker shutdown and queue drain
+- *(processor)* Make Ollama model and request timeout configurable
+
+### Changed
+
+- Add health checks to docker-compose for reliable startup
+- *(dashboard)* Extract shared backoff helper
+
+### Documentation
+
+- Add MIT license
+- Add contributor documentation and templates
+- Enhance README with badges, quick start, and roadmap checkboxes
+- Align documented versions with CI and go.mod (Go 1.25, Python 3.11, Node 22)
+- Remove stale entries from GOOD_FIRST_ISSUES.md, add review date and label link
+- Update CHANGELOG.md for dashboard exponential backoff ([#8](https://github.com/Uday9909/Sentinel-Ai/issues/8))
+- Add architecture decision records
+- *(changelog)* Add entry for issue #29 async ingestion
+
+### Fixed
+
+- Resolve issue #11
+- *(processor)* Add kafka reconnect backoff
+- *(ingestion)* Return socket teardown error in Ping and assert error in nil writer test
+- *(ingestion)* Sanitize health error response
+- *(ingestion)* Address review comments for kafka health check
+- Format dashboard package manifest
+- *(ci)* Prevent duplicate contributor entries in CONTRIBUTORS.md
+- *(ingestion)* Address async pipeline review feedback
+- *(ingestion)* Check shutdownCh before queue send in handleIngest
+- *(processor)* Tolerate invalid OLLAMA_REQUEST_TIMEOUT; rename mislabeled test
+
+### Testing
+
+- *(dashboard)* Add unit tests for App polling backoff and recovery
+- *(processor)* Cover kafka reconnect backoff sequence ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 2 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 3 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 4 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 5 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 6 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 7 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 8 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 9 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 10 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 11 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 12 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 13 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Verify reconnect backoff progression step 14 ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(processor)* Optimize getenv mocks in regression test ([#12](https://github.com/Uday9909/Sentinel-Ai/issues/12))
+- *(ingestion)* Add unit test suite for async queue, retry, dlq, and shutdown
+<!-- generated by git-cliff -->
