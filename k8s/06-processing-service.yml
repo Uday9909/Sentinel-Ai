@@ -52,6 +52,10 @@ spec:
               value: "http://elasticsearch:9200"
             - name: OLLAMA_HOST
               value: "http://ollama:11434"
+            - name: OLLAMA_MODEL
+              value: "llama3.2:1b"
+            - name: OLLAMA_REQUEST_TIMEOUT
+              value: "30"
           resources:
             requests:
               memory: "512Mi"

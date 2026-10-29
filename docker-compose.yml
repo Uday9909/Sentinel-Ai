@@ -90,6 +90,8 @@ services:
       KAFKA_BROKER: kafka:9092
       ES_URL: http://elasticsearch:9200
       OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:1b
+      OLLAMA_REQUEST_TIMEOUT: 30
       MODEL_PATH: /app/data/isolation_forest.joblib
     depends_on:
       kafka:
