@@ -180,7 +180,7 @@ python3 scripts/demo_script.py
 
 ## 🤝 Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, the PR process, and good first issues. Check out [GOOD_FIRST_ISSUES.md](GOOD_FIRST_ISSUES.md) for starter-friendly tasks.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and the PR process. Check out the [`good first issue`](https://github.com/Uday9909/Sentinel-Ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label on GitHub for starter-friendly tasks.
 
 ---
 
